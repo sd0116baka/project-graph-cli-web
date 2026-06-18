@@ -6,9 +6,17 @@ import {
   exportPgJson,
   importMarkdown,
   importMermaid,
+  pgJsonToArchive,
+  type PgJsonDocument,
   type ProjectGraphPatch,
 } from "@graphif/project-graph-core";
-import { inspectPrgArchive, readPrgFile, validatePrgArchive, writePrgFile, type PrgInspection } from "@graphif/prg-codec";
+import {
+  inspectPrgArchive,
+  readPrgFile,
+  validatePrgArchive,
+  writePrgFile,
+  type PrgInspection,
+} from "@graphif/prg-codec";
 import { readFile, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -18,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 type Command = "inspect" | "validate" | "export" | "import" | "patch" | "upgrade" | "live" | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
-type ImportFormat = "markdown" | "mermaid";
+type ImportFormat = "pgjson" | "markdown" | "mermaid";
 
 interface ParsedArgs {
   command: Command;
@@ -40,7 +48,7 @@ Usage:
   project-graph inspect <file.prg> [--json]
   project-graph validate <file.prg> [--json]
   project-graph export <file.prg> --format pgjson|markdown|mermaid [-o output] [--root <node-id>]
-  project-graph import <input.md|input.mmd> --format markdown|mermaid -o output.prg
+  project-graph import <input.pg.json|input.md|input.mmd> --format pgjson|markdown|mermaid -o output.prg
   project-graph patch <input.prg> <ops.json> -o output.prg
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
@@ -53,7 +61,7 @@ Commands:
   inspect   Print document metadata and object counts.
   validate  Check archive shape, references, duplicate UUIDs, and attachments.
   export    Export a document to pgjson, Markdown, or Mermaid.
-  import    Import Markdown or Mermaid into a new .prg document.
+  import    Import pgjson, Markdown, or Mermaid into a new .prg document.
   patch     Apply an operation batch and write a new .prg document.
   upgrade   Re-encode a .prg archive while preserving attachments and unknown entries.
   live      Send commands to a GUI instance started with --live.
@@ -115,7 +123,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const format = requireImportFormat(args.format ?? inferImportFormat(file));
     const output = requireOutput(args);
     const content = await readFile(file, "utf8");
-    const archive = format === "markdown" ? importMarkdown(content) : importMermaid(content);
+    const archive =
+      format === "pgjson"
+        ? pgJsonToArchive(JSON.parse(content) as PgJsonDocument)
+        : format === "markdown"
+          ? importMarkdown(content)
+          : importMermaid(content);
     await writePrgFile(output, archive, { preserveExtraEntries: true, preserveThumbnail: args.preserveThumbnail });
     return 0;
   }
@@ -127,7 +140,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const archive = await readPrgFile(file);
     const patch = parsePatch(await readFile(patchFile, "utf8"));
     const result = applyOperationsToArchive(archive, patch);
-    await writePrgFile(output, result.archive, { preserveExtraEntries: true, preserveThumbnail: args.preserveThumbnail });
+    await writePrgFile(output, result.archive, {
+      preserveExtraEntries: true,
+      preserveThumbnail: args.preserveThumbnail,
+    });
     if (args.json) {
       printJson({ ok: true, changed: result.changed, warnings: result.warnings });
     } else {
@@ -198,7 +214,19 @@ function parseArgs(argv: string[]): ParsedArgs {
   const rawCommand = positionals.shift();
 
   if (!rawCommand || rawCommand === "help") {
-    return { command: "help", positionals, format, output, root, port, token, json, inPlace, livePatchSave, preserveThumbnail };
+    return {
+      command: "help",
+      positionals,
+      format,
+      output,
+      root,
+      port,
+      token,
+      json,
+      inPlace,
+      livePatchSave,
+      preserveThumbnail,
+    };
   }
 
   if (
@@ -280,16 +308,19 @@ function requireExportFormat(format: string | undefined): ExportFormat {
 }
 
 function requireImportFormat(format: string | undefined): ImportFormat {
-  if (format === "markdown" || format === "mermaid") {
+  if (format === "pgjson" || format === "markdown" || format === "mermaid") {
     return format;
   }
-  throw new Error("Missing or invalid --format. Expected markdown or mermaid.");
+  throw new Error("Missing or invalid --format. Expected pgjson, markdown, or mermaid.");
 }
 
 function inferImportFormat(file: string): ImportFormat | undefined {
   const lower = file.toLowerCase();
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
     return "markdown";
+  }
+  if (lower.endsWith(".pg.json") || lower.endsWith(".pgjson")) {
+    return "pgjson";
   }
   if (lower.endsWith(".mmd") || lower.endsWith(".mermaid")) {
     return "mermaid";
@@ -458,6 +489,7 @@ async function readLiveSession(required: boolean, args: ParsedArgs): Promise<Liv
     if (required) {
       throw new Error(
         `No live session found. Start the GUI with --live, or pass --port and --token. ${String(error)}`,
+        { cause: error },
       );
     }
     return undefined;
