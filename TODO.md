@@ -12,10 +12,10 @@ Fork: `sd0116baka/project-graph-cli-web`
 
 ## Phase 1 - Unified Backend Operations
 
-- [ ] `P1-1` Add headless graph APIs to the Web server: query, patch, and export.
-- [ ] `P1-2` Reuse `@graphif/prg-codec` and `@graphif/project-graph-core` in the Web server instead of duplicating graph logic.
-- [ ] `P1-3` Define server-side write concurrency semantics around locks, ETags, and patch base revisions.
-- [ ] `P1-4` Return stable machine-readable JSON errors for agent callers.
+- [x] `P1-1` Add headless graph APIs to the Web server: query, patch, and export.
+- [x] `P1-2` Reuse `@graphif/prg-codec` and `@graphif/project-graph-core` in the Web server instead of duplicating graph logic.
+- [x] `P1-3` Define server-side write concurrency semantics around locks, ETags, and patch base revisions.
+- [x] `P1-4` Return stable machine-readable JSON errors for agent callers.
 
 ## Phase 2 - CLI Access To The Web Backend
 

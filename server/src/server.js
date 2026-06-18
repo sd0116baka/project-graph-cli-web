@@ -1,3 +1,12 @@
+import {
+  applyOperationsToArchive,
+  exportMarkdown,
+  exportMermaid,
+  exportPgJson,
+  queryArchive,
+  validateProjectGraphPatchPayload,
+} from "@graphif/project-graph-core";
+import { readPrgData, writePrgData } from "@graphif/prg-codec";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -51,7 +60,7 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = Number(error?.statusCode ?? 500);
-    sendJson(res, Number.isInteger(statusCode) ? statusCode : 500, { error: message });
+    sendError(res, Number.isInteger(statusCode) ? statusCode : 500, error?.code ?? "internal_error", message);
   }
 });
 
@@ -151,6 +160,75 @@ async function handleApi(req, res, requestUrl) {
 
     if (segments.length === 4 && segments[3] === "history" && req.method === "GET") {
       sendJson(res, 200, { history: await listProjectHistory(id) });
+      return;
+    }
+
+    if (segments.length === 4 && segments[3] === "query" && (req.method === "GET" || req.method === "POST")) {
+      const query =
+        req.method === "POST"
+          ? normalizeGraphQuery(await readJson(req))
+          : graphQueryFromSearchParams(requestUrl.searchParams);
+      const { archive, etag } = await readProjectArchive(id);
+      res.setHeader("ETag", etag);
+      sendJson(res, 200, { ok: true, etag, result: queryArchive(archive, query) });
+      return;
+    }
+
+    if (segments.length === 4 && segments[3] === "export" && req.method === "GET") {
+      const format = normalizeExportFormat(requestUrl.searchParams.get("format") ?? "pgjson");
+      const root = requestUrl.searchParams.get("root") ?? undefined;
+      const { archive, etag } = await readProjectArchive(id);
+      const content =
+        format === "pgjson"
+          ? exportPgJson(archive)
+          : format === "markdown"
+            ? exportMarkdown(archive, root)
+            : exportMermaid(archive);
+      res.setHeader("ETag", etag);
+      sendJson(res, 200, { ok: true, etag, format, content });
+      return;
+    }
+
+    if (segments.length === 4 && segments[3] === "patch" && req.method === "POST") {
+      const lock = await getActiveLock(id);
+      if (lock && lock.clientId !== clientId) {
+        sendError(res, 423, "project_locked", "Project is locked by another client", { lock });
+        return;
+      }
+
+      const body = await readJson(req);
+      const patch = normalizeGraphPatch(body);
+      if (patch.baseRevision !== undefined) {
+        sendError(
+          res,
+          400,
+          "base_revision_not_supported",
+          "Web project patches use ETags through If-Match, not baseRevision.",
+        );
+        return;
+      }
+      const patchValidation = validateProjectGraphPatchPayload(patch);
+      if (!patchValidation.ok) {
+        sendError(res, 400, "invalid_patch_payload", "Invalid Project Graph patch payload", {
+          issues: patchValidation.issues,
+        });
+        return;
+      }
+
+      const { archive, etag: currentEtag } = await readProjectArchive(id);
+      const ifMatch = req.headers["if-match"];
+      if (ifMatch && !etagMatches(ifMatch, currentEtag)) {
+        sendError(res, 412, "etag_mismatch", "Project revision does not match", { currentEtag });
+        return;
+      }
+
+      const result = applyOperationsToArchive(archive, patch);
+      const content = Buffer.from(
+        await writePrgData(result.archive, { preserveExtraEntries: true, preserveThumbnail: false }),
+      );
+      const etag = await writeProjectBlob(id, content);
+      res.setHeader("ETag", etag);
+      sendJson(res, 200, { ok: true, etag, changed: result.changed, warnings: result.warnings });
       return;
     }
 
@@ -280,6 +358,22 @@ async function sendProjectBlob(res, id, headOnly) {
     return;
   }
   createReadStream(filePath).pipe(res);
+}
+
+async function readProjectArchive(id) {
+  const content = await fs.readFile(projectFilePath(id)).catch((error) => {
+    if (error?.code === "ENOENT") {
+      const notFound = new Error("Project file not found");
+      notFound.statusCode = 404;
+      notFound.code = "project_file_not_found";
+      throw notFound;
+    }
+    throw error;
+  });
+  return {
+    archive: await readPrgData(content),
+    etag: etagForBuffer(content),
+  };
 }
 
 async function writeProjectBlob(id, content) {
@@ -461,6 +555,118 @@ function normalizeRevisionName(revision) {
   return revision;
 }
 
+function normalizeExportFormat(format) {
+  if (format === "pgjson" || format === "markdown" || format === "mermaid") {
+    return format;
+  }
+  const error = new Error("Invalid export format");
+  error.statusCode = 400;
+  error.code = "invalid_export_format";
+  throw error;
+}
+
+function graphQueryFromSearchParams(searchParams) {
+  const rawQuery = {};
+  for (const [key, value] of searchParams.entries()) {
+    if (key === "section" && value === "null") {
+      rawQuery.section = null;
+    } else if (key === "limit") {
+      rawQuery.limit = Number(value);
+    } else if (key === "includeUnsupported") {
+      rawQuery.includeUnsupported = value === "true" || value === "1";
+    } else {
+      rawQuery[key] = value;
+    }
+  }
+  return normalizeGraphQuery(rawQuery);
+}
+
+function normalizeGraphQuery(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    const error = new Error("Query payload must be an object");
+    error.statusCode = 400;
+    error.code = "invalid_query";
+    throw error;
+  }
+
+  const query = {};
+  if (value.kind !== undefined) {
+    if (
+      value.kind !== "all" &&
+      value.kind !== "node" &&
+      value.kind !== "section" &&
+      value.kind !== "edge" &&
+      value.kind !== "attachment" &&
+      value.kind !== "unsupported"
+    ) {
+      const error = new Error("Invalid query kind");
+      error.statusCode = 400;
+      error.code = "invalid_query_kind";
+      throw error;
+    }
+    query.kind = value.kind;
+  }
+  if (value.id !== undefined) {
+    if (typeof value.id !== "string") {
+      const error = new Error("Query id must be a string");
+      error.statusCode = 400;
+      error.code = "invalid_query_id";
+      throw error;
+    }
+    query.id = value.id;
+  }
+  if (value.text !== undefined) {
+    if (typeof value.text !== "string") {
+      const error = new Error("Query text must be a string");
+      error.statusCode = 400;
+      error.code = "invalid_query_text";
+      throw error;
+    }
+    query.text = value.text;
+  }
+  if (value.section !== undefined) {
+    if (value.section !== null && typeof value.section !== "string") {
+      const error = new Error("Query section must be a string or null");
+      error.statusCode = 400;
+      error.code = "invalid_query_section";
+      throw error;
+    }
+    query.section = value.section;
+  }
+  if (value.limit !== undefined) {
+    if (!Number.isInteger(value.limit) || value.limit < 1) {
+      const error = new Error("Query limit must be a positive integer");
+      error.statusCode = 400;
+      error.code = "invalid_query_limit";
+      throw error;
+    }
+    query.limit = value.limit;
+  }
+  if (value.includeUnsupported !== undefined) {
+    if (typeof value.includeUnsupported !== "boolean") {
+      const error = new Error("Query includeUnsupported must be a boolean");
+      error.statusCode = 400;
+      error.code = "invalid_query_include_unsupported";
+      throw error;
+    }
+    query.includeUnsupported = value.includeUnsupported;
+  }
+  return query;
+}
+
+function normalizeGraphPatch(value) {
+  if (Array.isArray(value)) {
+    return { ops: value };
+  }
+  if (typeof value === "object" && value !== null && Array.isArray(value.ops)) {
+    return value;
+  }
+  const error = new Error("Patch payload must be an operation array or an object with an ops array");
+  error.statusCode = 400;
+  error.code = "invalid_patch";
+  throw error;
+}
+
 function normalizeProjectName(name) {
   const normalized = String(name ?? "")
     .trim()
@@ -532,7 +738,19 @@ function safeEquals(actual, expected) {
 
 function sendUnauthorized(res) {
   res.setHeader("WWW-Authenticate", 'Basic realm="Project Graph Web", charset="UTF-8"');
-  sendJson(res, 401, { error: "Authentication required" });
+  sendError(res, 401, "authentication_required", "Authentication required");
+}
+
+function sendError(res, statusCode, code, message, details = undefined) {
+  const payload = {
+    ok: false,
+    code,
+    error: message,
+  };
+  if (details !== undefined) {
+    payload.details = details;
+  }
+  sendJson(res, statusCode, payload);
 }
 
 function sendJson(res, statusCode, data) {

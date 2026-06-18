@@ -7,6 +7,10 @@
     "dev": "node src/server.js",
     "start": "node src/server.js"
   },
+  "dependencies": {
+    "@graphif/prg-codec": "workspace:*",
+    "@graphif/project-graph-core": "workspace:*"
+  },
   "engines": {
     "node": ">=26.0.0"
   }

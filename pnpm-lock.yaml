@@ -754,7 +754,14 @@ importers:
         specifier: "catalog:"
         version: 5.9.2(patch_hash=3e406bcbc915a43404e343869d7ea80317c7237f58067404369e459a4634c1b6)
 
-  server: {}
+  server:
+    dependencies:
+      "@graphif/prg-codec":
+        specifier: workspace:*
+        version: link:../packages/prg-codec
+      "@graphif/project-graph-core":
+        specifier: workspace:*
+        version: link:../packages/project-graph-core
 
 packages:
   "@ai-sdk/gateway@3.0.109":
