@@ -77,6 +77,12 @@ $env:PROJECT_GRAPH_BACKEND_START_SCRIPT = "C:\path\to\start-web.ps1"
 
 如果需要给局域网其他设备访问，仍然使用 `start-web.cmd` 启动 LAN 后端，并保留默认认证。
 
+发布前可以用认证版 LAN smoke 检查默认认证、LAN 注册表和完整项目 API：
+
+```powershell
+.\smoke-lan-auth.cmd
+```
+
 ## 自定义数据位置
 
 默认数据目录是：
@@ -113,6 +119,12 @@ server\web-runtime.json
 
 ```powershell
 .\start-web.cmd -DataDir .\server\data
+```
+
+升级或替换运行目录前，可以用回滚 smoke 演练备份、验证、恢复和回滚后数据状态：
+
+```powershell
+.\smoke-upgrade-rollback.cmd
 ```
 
 ## 开机登录自启
@@ -235,7 +247,7 @@ web-backups
 
 - 先校验备份包结构。
 - 先给当前 `<DataDir>` 再创建一份预恢复备份。
-- 调用 `stop-web.cmd` 停止默认端口范围 `37820-37920` 内的 Project Graph Web 服务。
+- 如果 `server\web-runtime.json` 指向同一个数据目录，调用 `stop-web.cmd` 停止其中记录的实际端口；否则停止 `-Port` 指定的端口。
 - 替换 `<DataDir>`。
 - 重置 `locks.json`，避免恢复后残留旧编辑锁。
 

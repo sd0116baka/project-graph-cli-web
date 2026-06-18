@@ -25,6 +25,8 @@
     "web:restore": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-data.ps1",
     "web:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-web.ps1",
     "web:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-web.ps1",
+    "web:smoke:lan-auth": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-lan-auth.ps1",
+    "web:smoke:rollback": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-upgrade-rollback.ps1",
     "package:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1",
     "release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-readiness.ps1",
     "live:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-live-cli.ps1",

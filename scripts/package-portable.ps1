@@ -141,7 +141,7 @@ setlocal
 cd /d "%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-web.ps1" -SkipBuild %*'
 
-foreach ($Name in @("stop-web", "status-web", "smoke-web", "backup-data", "restore-data", "open-firewall", "install-startup", "uninstall-startup")) {
+foreach ($Name in @("stop-web", "status-web", "smoke-web", "smoke-lan-auth", "smoke-upgrade-rollback", "backup-data", "restore-data", "open-firewall", "install-startup", "uninstall-startup")) {
   $ScriptName = "$Name.ps1"
   Set-Content -LiteralPath (Join-Path $StageRoot "$Name.cmd") -Encoding ASCII -Value "@echo off
 setlocal
@@ -163,6 +163,13 @@ Quick start:
 .\start-web.cmd
 .\project-graph.cmd target list --json
 .\smoke-web.cmd
+```
+
+Release smokes:
+
+```powershell
+.\smoke-lan-auth.cmd
+.\smoke-upgrade-rollback.cmd
 ```
 
 The Web backend stores data in `server\data` by default. Use `-DataDir <path>` with `start-web.cmd`, `smoke-web.cmd`, backup, and restore scripts to keep data somewhere else.

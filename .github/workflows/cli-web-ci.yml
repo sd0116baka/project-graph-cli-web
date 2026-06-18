@@ -91,9 +91,47 @@ jobs:
           $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-web-data"
           .\scripts\smoke-web.ps1 -Port 37820 -DataDir $DataDir
 
+      - name: Smoke LAN auth Web server
+        shell: powershell
+        run: |
+          $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-lan-auth-data"
+          .\scripts\smoke-lan-auth.ps1 -Port 37821 -DataDir $DataDir
+
+      - name: Smoke upgrade rollback
+        shell: powershell
+        run: |
+          $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-rollback-data"
+          $BackupDir = Join-Path $env:RUNNER_TEMP "project-graph-rollback-backups"
+          .\scripts\smoke-upgrade-rollback.ps1 -Port 37822 -DataDir $DataDir -BackupDir $BackupDir
+
       - name: Package portable preview
         shell: powershell
         run: .\scripts\package-portable.ps1 -SkipBuild
+
+      - name: Smoke portable wrapper gates
+        shell: powershell
+        run: |
+          $ExtractRoot = Join-Path $env:RUNNER_TEMP "project graph portable smoke"
+          New-Item -ItemType Directory -Force -Path $ExtractRoot | Out-Null
+          $Zip = Get-ChildItem -LiteralPath "dist\portable" -Filter "project-graph-cli-web-*-windows-preview.zip" | Select-Object -First 1
+          if (-not $Zip) {
+            throw "Portable preview zip was not created."
+          }
+          Expand-Archive -LiteralPath $Zip.FullName -DestinationPath $ExtractRoot -Force
+          $Runtime = Get-ChildItem -LiteralPath $ExtractRoot -Directory |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "start-web.cmd") } |
+            Select-Object -First 1
+          if (-not $Runtime) {
+            throw "Could not locate extracted portable runtime."
+          }
+          Push-Location $Runtime.FullName
+          try {
+            .\smoke-lan-auth.cmd -Port 37823
+            .\smoke-upgrade-rollback.cmd -Port 37824
+          } finally {
+            .\stop-web.cmd -PortStart 37823 -PortEnd 37824
+            Pop-Location
+          }
 
       - name: Check release readiness
         shell: powershell

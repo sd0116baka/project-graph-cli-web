@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tauri::Manager;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +50,7 @@ pub fn project_graph_backend_targets() -> Vec<Value> {
 
 #[tauri::command]
 pub fn project_graph_backend_start(
+    app: tauri::AppHandle,
     options: Option<BackendStartOptions>,
 ) -> Result<BackendStartResult, String> {
     let options = options.unwrap_or(BackendStartOptions {
@@ -59,7 +61,22 @@ pub fn project_graph_backend_start(
         local_only: Some(false),
         log_path: None,
     });
-    let script = backend_start_script()?;
+    let script = backend_start_script(&app)?;
+    let resource_backed = is_backend_runtime_script(&script);
+    let data_dir = match options.data_dir.as_deref() {
+        Some(value) if !value.trim().is_empty() => Some(value.to_string()),
+        _ if resource_backed => Some(
+            app.path()
+                .app_data_dir()
+                .map_err(|error| {
+                    format!("Failed to resolve Project Graph app data directory: {error}")
+                })?
+                .join("backend-data")
+                .to_string_lossy()
+                .to_string(),
+        ),
+        _ => None,
+    };
     let log_path = options
         .log_path
         .as_ref()
@@ -75,15 +92,13 @@ pub fn project_graph_backend_start(
     if let Some(port) = options.port {
         command.arg("-Port").arg(port.to_string());
     }
-    if let Some(data_dir) = options.data_dir.as_deref() {
-        if !data_dir.trim().is_empty() {
-            command.arg("-DataDir").arg(data_dir);
-        }
+    if let Some(data_dir) = data_dir.as_deref() {
+        command.arg("-DataDir").arg(data_dir);
     }
     if options.no_auth.unwrap_or(false) {
         command.arg("-NoAuth");
     }
-    if options.skip_build.unwrap_or(false) {
+    if options.skip_build.unwrap_or(resource_backed) {
         command.arg("-SkipBuild");
     }
     if options.local_only.unwrap_or(false) {
@@ -113,7 +128,7 @@ fn backend_registry_path() -> std::path::PathBuf {
     std::env::temp_dir().join("project-graph-backends.json")
 }
 
-fn backend_start_script() -> Result<PathBuf, String> {
+fn backend_start_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("PROJECT_GRAPH_BACKEND_START_SCRIPT") {
         let candidate = PathBuf::from(path);
         if candidate.is_file() {
@@ -129,6 +144,9 @@ fn backend_start_script() -> Result<PathBuf, String> {
             roots.push(parent.to_path_buf());
         }
     }
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        roots.push(resource_dir);
+    }
     for root in roots {
         if let Some(script) = find_start_script_from(&root) {
             return Ok(script);
@@ -139,12 +157,28 @@ fn backend_start_script() -> Result<PathBuf, String> {
 
 fn find_start_script_from(root: &Path) -> Option<PathBuf> {
     for ancestor in root.ancestors() {
+        let resource_candidate = ancestor
+            .join("backend-runtime")
+            .join("scripts")
+            .join("start-web.ps1");
+        if resource_candidate.is_file() {
+            return Some(resource_candidate);
+        }
         let candidate = ancestor.join("scripts").join("start-web.ps1");
         if candidate.is_file() {
             return Some(candidate);
         }
     }
     None
+}
+
+fn is_backend_runtime_script(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("backend-runtime")
+    })
 }
 
 fn powershell_executable() -> &'static str {

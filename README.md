@@ -17,6 +17,7 @@ The upstream desktop product remains documented in [app/README.md](app/README.md
 | LAN Web backend     | Shared backend and browser UI for local network use. | [README-web.md](README-web.md) |
 
 The backend-first convergence plan is documented in [docs/backend-first-architecture.md](docs/backend-first-architecture.md).
+Desktop backend runtime packaging is documented in [docs/desktop-backend-runtime.md](docs/desktop-backend-runtime.md).
 Distribution and portable preview packaging are documented in [docs/distribution.md](docs/distribution.md).
 Backend security and compatibility gates are documented in [docs/security.md](docs/security.md).
 
@@ -66,6 +67,8 @@ pnpm --filter @graphif/project-graph-cli type-check
 pnpm --filter @graphif/project-graph-web-server test
 pnpm nx build @graphif/project-graph-cli
 pnpm run web:build
+pnpm run web:smoke:lan-auth
+pnpm run web:smoke:rollback
 ```
 
 Full local Web smoke flow:

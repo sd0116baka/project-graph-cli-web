@@ -32,13 +32,11 @@ After extracting:
 
 ## Desktop Sidecar Decision
 
-The current Desktop can discover and launch a local backend through `scripts/start-web.ps1`, but the final installer still needs a packaging decision:
+The current Desktop can discover and launch a local backend through `scripts/start-web.ps1`.
 
-- embed the backend as a native sidecar executable,
-- bundle a Node runtime plus the portable backend folder,
-- or require an external backend daemon.
+The installer direction is to bundle the portable backend runtime as a Tauri resource under `backend-runtime\`. Desktop startup now searches this installed resource layout in addition to source and portable checkout layouts. The detailed installer contract is documented in [desktop-backend-runtime.md](desktop-backend-runtime.md).
 
-For this fork, the portable zip is the preview distribution while that decision remains open.
+For this fork, the portable zip remains the preview distribution until a clean Windows Desktop installer smoke validates the resource layout and the Node runtime policy.
 
 ## Upgrade And Data
 
@@ -56,3 +54,19 @@ Before replacing a runtime folder, run:
 ```
 
 The backend keeps `.prg` history backups per project. The release gate should still include a clean-machine smoke, a LAN smoke, and rollback instructions before a non-preview release.
+
+## Release Smokes
+
+Run the authenticated LAN-mode smoke:
+
+```powershell
+.\scripts\smoke-lan-auth.ps1
+```
+
+Run the upgrade and rollback smoke:
+
+```powershell
+.\scripts\smoke-upgrade-rollback.ps1
+```
+
+Both scripts start and stop their own temporary backend process. They require the Web frontend and CLI to be built first.

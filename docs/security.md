@@ -37,6 +37,8 @@ Before a non-preview release, run:
 ```powershell
 pnpm --filter @graphif/project-graph-cli test
 pnpm --filter @graphif/project-graph-web-server test
+.\scripts\smoke-lan-auth.ps1
+.\scripts\smoke-upgrade-rollback.ps1
 pnpm run package:portable -- -SkipBuild
 .\scripts\check-release-readiness.ps1
 ```
@@ -44,7 +46,6 @@ pnpm run package:portable -- -SkipBuild
 Release validation should also include:
 
 - clean-machine portable zip smoke,
-- LAN smoke with auth enabled,
 - Desktop installer smoke,
-- backup/restore smoke against an existing data directory,
+- backup/restore smoke against a real existing data directory,
 - rollback instructions for replacing the backend runtime folder.

@@ -11,12 +11,15 @@ Set-Location $Root
 $RequiredPaths = @(
   ".github\workflows\cli-web-ci.yml",
   "docs\backend-first-architecture.md",
+  "docs\desktop-backend-runtime.md",
   "docs\distribution.md",
   "docs\security.md",
   "README-cli.md",
   "README-web.md",
   "scripts\package-portable.ps1",
   "scripts\smoke-web.ps1",
+  "scripts\smoke-lan-auth.ps1",
+  "scripts\smoke-upgrade-rollback.ps1",
   "scripts\backup-data.ps1",
   "scripts\restore-data.ps1"
 )
@@ -84,7 +87,7 @@ if ($PortableZipItem.Length -lt 1MB) {
 }
 
 $Ci = Get-Content -Raw -LiteralPath (Join-Path $Root ".github\workflows\cli-web-ci.yml")
-foreach ($Needle in @("Test CLI", "Test Web server API", "Smoke Web server", "Package portable preview", "Upload portable preview")) {
+foreach ($Needle in @("Test CLI", "Test Web server API", "Smoke Web server", "Smoke LAN auth Web server", "Smoke upgrade rollback", "Package portable preview", "Smoke portable wrapper gates", "Upload portable preview")) {
   if ($Ci -notmatch [regex]::Escape($Needle)) {
     throw "CLI/Web CI is missing gate: $Needle"
   }

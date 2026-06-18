@@ -4,7 +4,8 @@ param(
   [switch]$ValidateOnly,
   [switch]$Restart,
   [int]$Port = 37820,
-  [string]$DataDir = ""
+  [string]$DataDir = "",
+  [string]$PreRestoreBackupDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,16 @@ $ServerDir = Join-Path $Root "server"
 $DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 $BackupFullPath = (Resolve-Path $BackupPath).Path
 $TempDir = Join-Path $env:TEMP "project-graph-web-restore-$([guid]::NewGuid().ToString('N'))"
+$TargetPort = $Port
+$Runtime = Read-WebRuntime -Root $Root
+if (
+  $Runtime `
+    -and $Runtime.dataDir `
+    -and ($Runtime.PSObject.Properties.Name -contains "port") `
+    -and (Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir)
+) {
+  $TargetPort = [int]$Runtime.port
+}
 
 function Assert-PathInside([string]$Parent, [string]$Child) {
   $ParentFull = [IO.Path]::GetFullPath($Parent).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
@@ -48,10 +59,17 @@ try {
   }
 
   if (Test-Path $DataDir) {
-    & (Join-Path $ScriptDir "backup-data.ps1") -Keep 10 -DataDir $DataDir | Out-Null
+    $BackupArgs = @{
+      Keep = 10
+      DataDir = $DataDir
+    }
+    if ($PreRestoreBackupDir) {
+      $BackupArgs.BackupDir = $PreRestoreBackupDir
+    }
+    & (Join-Path $ScriptDir "backup-data.ps1") @BackupArgs | Out-Null
   }
 
-  & (Join-Path $ScriptDir "stop-web.ps1") | Out-Null
+  & (Join-Path $ScriptDir "stop-web.ps1") -PortStart $TargetPort -PortEnd $TargetPort | Out-Null
 
   New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
   Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue |
@@ -70,5 +88,5 @@ try {
 }
 
 if ($Restart) {
-  & (Join-Path $ScriptDir "start-web.ps1") -SkipBuild -Port $Port -DataDir $DataDir
+  & (Join-Path $ScriptDir "start-web.ps1") -SkipBuild -Port $TargetPort -DataDir $DataDir
 }
