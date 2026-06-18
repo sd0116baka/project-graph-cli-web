@@ -8,8 +8,10 @@ The CLI is the agent-facing entry point for Project Graph documents. It supports
 ## Build
 
 ```powershell
-pnpm --filter @graphif/project-graph-cli build
+pnpm nx build @graphif/project-graph-cli
 ```
+
+This uses the Nx target graph and builds workspace dependencies first. If you run the package script directly, build `@graphif/prg-codec` and `@graphif/project-graph-core` first.
 
 ## Inspect and Validate
 
