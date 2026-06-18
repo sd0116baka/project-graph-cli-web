@@ -113,6 +113,11 @@ export enum ProjectState {
   Unsaved,
 }
 
+export interface ProjectInitOptions {
+  interactive?: boolean;
+  allowUpgrade?: boolean;
+}
+
 /**
  * “工程”
  * 一个标签页对应一个工程，一个工程只能对应一个URI
@@ -193,11 +198,19 @@ export class Project extends Tab {
    * @param currentVersion 当前文件版本
    * @param latestVersion 最新版本
    */
-  private async checkAndConfirmUpgrade(currentVersion: string, latestVersion: string): Promise<boolean> {
+  private async checkAndConfirmUpgrade(
+    currentVersion: string,
+    latestVersion: string,
+    options: ProjectInitOptions = {},
+  ): Promise<boolean> {
+    const interactive = options.interactive !== false;
     const versionDiff = this.compareVersion(currentVersion, latestVersion);
 
     // 文件版本 > 软件版本：文件来自更新版本的软件，当前软件无法安全解析，拒绝打开
     if (versionDiff > 0) {
+      if (!interactive) {
+        throw new Error(`Project file version ${currentVersion} is newer than this app supports (${latestVersion}).`);
+      }
       await Dialog.buttons(
         "文件版本过新，无法打开",
         `该文件由更新版本的软件保存（prg文件版本 ${currentVersion}，当前软件支持的prg最高版本 ${latestVersion}）。\n\n请升级软件后再打开此文件，以避免数据损坏。`,
@@ -212,6 +225,13 @@ export class Project extends Tab {
     }
 
     // 文件版本 < 软件版本：需要升级旧文件，弹出确认对话框
+    if (!interactive) {
+      if (options.allowUpgrade === true) {
+        return true;
+      }
+      throw new Error(`Project file version ${currentVersion} requires upgrade to ${latestVersion}.`);
+    }
+
     const response = await Dialog.buttons(
       "检测到旧版本项目文件",
       `当前文件版本为 ${currentVersion}，需要升级到 ${latestVersion} (是prg文件版本,非软件版本)。\n\n升级过程不可逆且可能存在风险，特别是对于大型文件，建议提前备份。是否继续升级？`,
@@ -297,7 +317,8 @@ export class Project extends Tab {
   /**
    * 服务加载完成后再调用
    */
-  async init() {
+  async init(options: ProjectInitOptions = {}) {
+    const interactive = options.interactive !== false;
     if (!(await this.fs.exists(this.uri))) {
       return;
     }
@@ -308,7 +329,7 @@ export class Project extends Tab {
       // 检查并确认升级
       const currentVersion = metadata?.version || "2.0.0";
       const latestVersion = ProjectUpgrader.NLatestVersion;
-      const confirmed = await this.checkAndConfirmUpgrade(currentVersion, latestVersion);
+      const confirmed = await this.checkAndConfirmUpgrade(currentVersion, latestVersion, options);
       if (!confirmed) return; // 用户取消升级，不打开文件，跳过 this.projectState = ProjectState.Saved
 
       // 升级数据
@@ -331,6 +352,9 @@ export class Project extends Tab {
       }
     } catch (e) {
       console.warn(e);
+      if (!interactive) {
+        throw e;
+      }
       const errorMessage = `打开文件时发生错误，文件内容可能已损坏或与当前软件版本不兼容。\n\n错误信息：${e}`;
       const result = await Dialog.buttons("文件解析失败", errorMessage, [
         { id: "ok", label: "确定" },

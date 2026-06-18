@@ -51,6 +51,7 @@ interface RevisionEntry {
 
 let liveStarted = false;
 const documentRevisions = new Map<string, RevisionEntry>();
+const openingDocuments = new Map<string, Promise<Project>>();
 
 export async function startLiveCommandService(port?: number): Promise<LiveSession> {
   if (liveStarted) {
@@ -183,9 +184,8 @@ async function openDocument(params: Record<string, unknown>) {
     throw new Error(`Live open_document only supports .prg files: ${uri.toString()}`);
   }
 
-  const existing = store
-    .get(tabsAtom)
-    .find((tab): tab is Project => tab instanceof Project && getDocumentId(tab) === uri.toString());
+  const documentId = uri.toString();
+  const existing = findProjectByDocumentId(documentId);
   if (existing) {
     activateProject(existing);
     return {
@@ -195,8 +195,22 @@ async function openDocument(params: Record<string, unknown>) {
     };
   }
 
-  const project = await loadProjectFromUri(uri);
-  store.set(tabsAtom, [...store.get(tabsAtom), project]);
+  const inFlight = openingDocuments.get(documentId);
+  if (inFlight) {
+    const opened = await inFlight;
+    activateProject(opened);
+    return {
+      opened: false,
+      alreadyOpen: true,
+      document: await describeProject(opened),
+    };
+  }
+
+  const opening = openAndRegisterProject(uri, documentId);
+  openingDocuments.set(documentId, opening);
+  const project = await opening.finally(() => {
+    openingDocuments.delete(documentId);
+  });
   activateProject(project);
 
   return {
@@ -206,25 +220,41 @@ async function openDocument(params: Record<string, unknown>) {
   };
 }
 
+async function openAndRegisterProject(uri: URI, documentId: string): Promise<Project> {
+  const project = await loadProjectFromUri(uri);
+  const existing = findProjectByDocumentId(documentId);
+  if (existing) {
+    await project.dispose();
+    return existing;
+  }
+  store.set(tabsAtom, [...store.get(tabsAtom), project]);
+  return project;
+}
+
 async function loadProjectFromUri(uri: URI): Promise<Project> {
   const dummyProject = new Project(uri);
   loadAllServicesBeforeInit(dummyProject);
-  const tab = await TabFactory.create(uri, dummyProject.fs);
-  await dummyProject.dispose();
+  let tab: Awaited<ReturnType<typeof TabFactory.create>> | undefined;
 
-  if (!(tab instanceof Project)) {
-    await tab.dispose();
-    throw new Error(`Live open_document only supports Project Graph documents: ${uri.toString()}`);
-  }
+  try {
+    tab = await TabFactory.create(uri, dummyProject.fs);
+    if (!(tab instanceof Project)) {
+      throw new Error(`Live open_document only supports Project Graph documents: ${uri.toString()}`);
+    }
 
-  loadAllServicesBeforeInit(tab);
-  await tab.init();
-  if (tab.projectState !== ProjectState.Saved) {
-    await tab.dispose();
-    throw new Error(`Live open_document failed to open document: ${uri.toString()}`);
+    loadAllServicesBeforeInit(tab);
+    await tab.init({ interactive: false });
+    if (tab.projectState !== ProjectState.Saved) {
+      throw new Error(`Live open_document failed to open document: ${uri.toString()}`);
+    }
+    loadAllServicesAfterInit(tab);
+    return tab;
+  } catch (error) {
+    await tab?.dispose();
+    throw error;
+  } finally {
+    await dummyProject.dispose();
   }
-  loadAllServicesAfterInit(tab);
-  return tab;
 }
 
 function activateProject(project: Project): void {
@@ -234,6 +264,10 @@ function activateProject(project: Project): void {
     .get(tabsAtom)
     .filter((tab): tab is Project => tab instanceof Project && tab !== project)
     .forEach((tab) => tab.pause());
+}
+
+function findProjectByDocumentId(documentId: string): Project | undefined {
+  return store.get(tabsAtom).find((tab): tab is Project => tab instanceof Project && getDocumentId(tab) === documentId);
 }
 
 async function projectToArchive(project: Project): Promise<CoreArchive> {
@@ -312,6 +346,7 @@ async function describeProject(
 
 function resolveProject(params: Record<string, unknown>): Project {
   const document = typeof params.document === "string" ? params.document : undefined;
+  const normalizedDocument = document ? normalizeDocumentTarget(document) : undefined;
   const projects = store
     .get(tabsAtom)
     .map((tab, index) => ({ tab, index }))
@@ -324,7 +359,11 @@ function resolveProject(params: Record<string, unknown>): Project {
   if (document) {
     const matches = projects.filter(
       ({ tab, index }) =>
-        getDocumentId(tab) === document || tab.uri.toString() === document || String(index) === document,
+        getDocumentId(tab) === document ||
+        getDocumentId(tab) === normalizedDocument ||
+        tab.uri.toString() === document ||
+        tab.uri.toString() === normalizedDocument ||
+        String(index) === document,
     );
     if (matches.length === 1) {
       return matches[0].tab;
@@ -348,6 +387,21 @@ function resolveProject(params: Record<string, unknown>): Project {
 
 function getDocumentId(project: Project): string {
   return project.uri.toString();
+}
+
+function normalizeDocumentTarget(document: string): string {
+  if (/^[a-zA-Z]:[\\/]/.test(document)) {
+    return URI.file(document).toString();
+  }
+  try {
+    const uri = URI.parse(document);
+    if (uri.scheme === "file") {
+      return uri.toString();
+    }
+  } catch {
+    // Keep the original document target for non-URI ids such as tab indexes.
+  }
+  return document;
 }
 
 function getProjectIndex(project: Project): number {

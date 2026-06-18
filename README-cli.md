@@ -76,13 +76,13 @@ Start the app with live mode enabled. The GUI writes a local session registry, a
 project-graph live list-sessions
 project-graph live list-documents --json
 project-graph live open .\other.prg --json
-project-graph live export --format pgjson --document file:///D:/graph.prg -o .\current.pg.json
-project-graph live patch .\ops.json --document file:///D:/graph.prg --base-revision 3 --json
+project-graph live export --format pgjson --document <id-from-list-documents> -o .\current.pg.json
+project-graph live patch .\ops.json --document <id-from-list-documents> --base-revision 3 --json
 ```
 
 `live open` asks the running GUI to open a local `.prg` file directly. It does not use the operating system file picker, so agents can open additional documents without GUI automation.
 
-`list-documents --json` returns each open document's `id` and `revision`. If more than one Project Graph document is open, `live inspect`, `live export`, and `live patch` require `--document <id>`.
+`list-documents --json` returns each open document's `id` and `revision`. If more than one Project Graph document is open, `live inspect`, `live export`, and `live patch` require `--document <id>`. Copy the `id` value from `list-documents`; on Windows, normalized file URIs may not be byte-for-byte identical to a hand-written `file:///D:/...` URI.
 
 `live patch` mutates the selected GUI document in memory and saves by default. When `baseRevision` is present, the GUI rejects the patch if the document has changed since that revision. Use `--no-save` only when you explicitly want a transient GUI-side change.
 

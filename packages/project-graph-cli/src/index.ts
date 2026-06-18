@@ -57,7 +57,7 @@ Usage:
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
-  project-graph live open <file.prg|file-uri> [--json]
+  project-graph live open <file.prg|file-uri> [--json] [--port <port> --token <token>]
   project-graph live inspect [--document <id>] [--json]
   project-graph live export --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--document <id>] [--json]
   project-graph live patch <ops.json> [--document <id>] [--base-revision <n>] [--json] [--no-save]
