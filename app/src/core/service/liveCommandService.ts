@@ -28,7 +28,25 @@ interface LiveRequest {
 
 type CoreArchive = Parameters<typeof applyOperationsToArchive>[0];
 
+interface LiveDocument {
+  id: string;
+  index: number;
+  title: string;
+  active: boolean;
+  type: "project" | "tab";
+  uri: string | null;
+  state: string | null;
+  dirty: boolean | null;
+  revision: number | null;
+}
+
+interface RevisionEntry {
+  fingerprint: string;
+  revision: number;
+}
+
 let liveStarted = false;
+const documentRevisions = new Map<string, RevisionEntry>();
 
 export async function startLiveCommandService(port?: number): Promise<LiveSession> {
   if (liveStarted) {
@@ -64,32 +82,47 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
     return listDocuments();
   }
 
-  const project = getActiveProject();
-  const archive = projectToArchive(project);
+  const options = asRecord(params);
+  const project = resolveProject(options);
+  const archive = await projectToArchive(project);
+  const revision = getProjectRevision(project);
 
   if (method === "inspect") {
-    return archiveToPgJson(archive);
+    return {
+      document: describeProject(project),
+      revision,
+      pgjson: archiveToPgJson(archive),
+    };
   }
 
   if (method === "export") {
-    const options = asRecord(params);
     const format = typeof options.format === "string" ? options.format : "pgjson";
+    let content: string;
     if (format === "pgjson") {
-      return exportPgJson(archive);
+      content = exportPgJson(archive);
+    } else if (format === "markdown") {
+      content = exportMarkdown(archive, typeof options.root === "string" ? options.root : undefined);
+    } else if (format === "mermaid") {
+      content = exportMermaid(archive);
+    } else {
+      throw new Error(`Unsupported live export format: ${format}`);
     }
-    if (format === "markdown") {
-      return exportMarkdown(archive, typeof options.root === "string" ? options.root : undefined);
-    }
-    if (format === "mermaid") {
-      return exportMermaid(archive);
-    }
-    throw new Error(`Unsupported live export format: ${format}`);
+    return {
+      document: describeProject(project),
+      revision,
+      format,
+      content,
+    };
   }
 
   if (method === "patch") {
     const { patch, save } = normalizePatchRequest(params);
+    if (patch.baseRevision !== undefined && patch.baseRevision !== revision) {
+      throw new Error(`Live patch revision mismatch: expected ${patch.baseRevision}, current ${revision}.`);
+    }
     const result = applyOperationsToArchive(archive, patch);
     applyArchiveToProject(project, result.archive);
+    const nextRevision = setProjectRevision(project, revision + 1);
     const warnings = [...result.warnings];
     const saveResult = await saveProjectIfRequested(project, save, warnings);
     return {
@@ -98,6 +131,9 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
       saved: saveResult.saved,
       uri: saveResult.uri,
       state: ProjectState[project.projectState],
+      document: describeProject(project),
+      previousRevision: revision,
+      revision: nextRevision,
     };
   }
 
@@ -107,16 +143,23 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
 function listDocuments() {
   const active = store.get(activeTabAtom);
   return store.get(tabsAtom).map((tab, index) => ({
-    index,
-    title: tab.title,
-    active: tab === active,
-    type: tab instanceof Project ? "project" : "tab",
-    uri: tab instanceof Project ? tab.uri.toString() : null,
-    state: tab instanceof Project ? ProjectState[tab.projectState] : null,
+    ...(tab instanceof Project
+      ? describeProject(tab, index, tab === active)
+      : {
+          id: `tab:${index}`,
+          index,
+          title: tab.title,
+          active: tab === active,
+          type: "tab" as const,
+          uri: null,
+          state: null,
+          dirty: null,
+          revision: null,
+        }),
   }));
 }
 
-function projectToArchive(project: Project): CoreArchive {
+async function projectToArchive(project: Project): Promise<CoreArchive> {
   return {
     stage: serialize(project.stage),
     tags: [...project.tags],
@@ -124,15 +167,20 @@ function projectToArchive(project: Project): CoreArchive {
     metadata: structuredClone(project.metadata),
     readme: project.readme,
     attachments: new Map(
-      [...project.attachments.entries()].map(([id, blob]) => [
-        id,
-        {
-          id,
-          extension: extensionFromMime(blob.type),
-          path: `attachments/${id}.${extensionFromMime(blob.type)}`,
-          data: new Uint8Array(),
-        },
-      ]),
+      await Promise.all(
+        [...project.attachments.entries()].map(async ([id, blob]) => {
+          const extension = extensionFromMime(blob.type);
+          return [
+            id,
+            {
+              id,
+              extension,
+              path: `attachments/${id}.${extension}`,
+              data: new Uint8Array(await blob.arrayBuffer()),
+            },
+          ] as const;
+        }),
+      ),
     ),
     extraEntries: new Map(),
   };
@@ -167,12 +215,102 @@ async function saveProjectIfRequested(
   return { saved: true, uri: project.uri.toString() };
 }
 
-function getActiveProject(): Project {
-  const active = store.get(activeTabAtom);
-  if (!(active instanceof Project)) {
-    throw new Error("No active Project Graph document.");
+function describeProject(
+  project: Project,
+  index = getProjectIndex(project),
+  active = store.get(activeTabAtom) === project,
+): LiveDocument {
+  return {
+    id: getDocumentId(project),
+    index,
+    title: project.title,
+    active,
+    type: "project",
+    uri: project.uri.toString(),
+    state: ProjectState[project.projectState],
+    dirty: project.projectState !== ProjectState.Saved,
+    revision: getProjectRevision(project),
+  };
+}
+
+function resolveProject(params: Record<string, unknown>): Project {
+  const document = typeof params.document === "string" ? params.document : undefined;
+  const projects = store
+    .get(tabsAtom)
+    .map((tab, index) => ({ tab, index }))
+    .filter((entry): entry is { tab: Project; index: number } => entry.tab instanceof Project);
+
+  if (projects.length === 0) {
+    throw new Error("No Project Graph document is open.");
   }
-  return active;
+
+  if (document) {
+    const matches = projects.filter(
+      ({ tab, index }) =>
+        getDocumentId(tab) === document || tab.uri.toString() === document || String(index) === document,
+    );
+    if (matches.length === 1) {
+      return matches[0].tab;
+    }
+    if (matches.length > 1) {
+      throw new Error(`Live document target is ambiguous: ${document}.`);
+    }
+    throw new Error(`Live document not found: ${document}.`);
+  }
+
+  if (projects.length === 1) {
+    return projects[0].tab;
+  }
+
+  throw new Error(
+    `Multiple Project Graph documents are open. Pass --document <id>. Available ids: ${projects
+      .map(({ tab }) => getDocumentId(tab))
+      .join(", ")}`,
+  );
+}
+
+function getDocumentId(project: Project): string {
+  return project.uri.toString();
+}
+
+function getProjectIndex(project: Project): number {
+  return store.get(tabsAtom).indexOf(project);
+}
+
+function getProjectRevision(project: Project): number {
+  const id = getDocumentId(project);
+  const fingerprint = getProjectFingerprint(project);
+  const existing = documentRevisions.get(id);
+  if (!existing) {
+    documentRevisions.set(id, { fingerprint, revision: 0 });
+    return 0;
+  }
+  if (existing.fingerprint !== fingerprint) {
+    existing.fingerprint = fingerprint;
+    existing.revision++;
+  }
+  return existing.revision;
+}
+
+function setProjectRevision(project: Project, revision: number): number {
+  documentRevisions.set(getDocumentId(project), {
+    fingerprint: getProjectFingerprint(project),
+    revision,
+  });
+  return revision;
+}
+
+function getProjectFingerprint(project: Project): string {
+  return JSON.stringify({
+    stageHash: project.stageHash,
+    tags: project.tags,
+    references: project.references,
+    metadata: project.metadata,
+    readme: project.readme,
+    attachments: [...project.attachments.entries()]
+      .map(([id, blob]) => ({ id, type: blob.type, size: blob.size }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  });
 }
 
 function normalizePatchRequest(params: unknown): { patch: ProjectGraphPatch; save: boolean } {

@@ -23,7 +23,7 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
         baseRevision: {
           type: "integer",
           description:
-            "Optional caller revision marker reserved for clients. It is currently accepted but not enforced.",
+            "Optional caller revision marker. Live patch rejects mismatches; offline patch accepts it without enforcement.",
         },
         ops: {
           type: "array",

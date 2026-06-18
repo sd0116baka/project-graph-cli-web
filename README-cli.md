@@ -75,14 +75,16 @@ Start the app with live mode enabled. The GUI writes a local session registry, a
 ```powershell
 project-graph live list-sessions
 project-graph live list-documents --json
-project-graph live export --format pgjson -o .\current.pg.json
-project-graph live patch .\ops.json --json
+project-graph live export --format pgjson --document file:///D:/graph.prg -o .\current.pg.json
+project-graph live patch .\ops.json --document file:///D:/graph.prg --base-revision 3 --json
 ```
 
-`live patch` mutates the open GUI document in memory and saves by default. Use `--no-save` only when you explicitly want a transient GUI-side change.
+`list-documents --json` returns each open document's `id` and `revision`. If more than one Project Graph document is open, `live inspect`, `live export`, and `live patch` require `--document <id>`.
+
+`live patch` mutates the selected GUI document in memory and saves by default. When `baseRevision` is present, the GUI rejects the patch if the document has changed since that revision. Use `--no-save` only when you explicitly want a transient GUI-side change.
 
 Manual connection is also supported:
 
 ```powershell
-project-graph live patch .\ops.json --port 37821 --token <token> --json
+project-graph live patch .\ops.json --document file:///D:/graph.prg --port 37821 --token <token> --json
 ```
