@@ -105,8 +105,9 @@ $env:PROJECT_GRAPH_BACKEND_REGISTRY = "C:\path\to\project-graph-backends.json"
 
 ```powershell
 project-graph server list --json
+project-graph server import .\outline.md --name "Shared graph" --json
 project-graph server query <project-id> --kind node --text Review --json
-project-graph server patch <project-id> .\ops.json --etag <etag-from-query> --json
+project-graph server patch <project-id> .\ops.json --etag <revision-token-from-query> --json
 project-graph server validate <project-id> --json
 project-graph server export <project-id> --format markdown -o .\current.md
 ```
@@ -125,7 +126,7 @@ $env:PROJECT_GRAPH_SERVER_USER = "pg"
 $env:PROJECT_GRAPH_SERVER_PASSWORD = "<password>"
 ```
 
-Web backend patches use `ETag` concurrency through `--etag` / `--if-match`. Numeric `baseRevision` is reserved for live GUI editing.
+Web backend responses include both the existing `etag` and the backend-first `revisionToken` alias. Patches accept `--etag` / `--if-match` for compatibility; agents should treat that value as the project `revisionToken`. Numeric `baseRevision` is reserved for live GUI editing.
 
 ### Agent Operation Schema
 
@@ -154,12 +155,12 @@ Use `--json` for every agent-facing command. The stable loop is:
 ```powershell
 project-graph server list --json
 project-graph server query <project-id> --kind node --text Review --json
-project-graph server patch <project-id> .\ops.json --etag <etag-from-query> --json
+project-graph server patch <project-id> .\ops.json --etag <revision-token-from-query> --json
 project-graph server validate <project-id> --json
 project-graph server export <project-id> --format markdown --json
 ```
 
-The `query`, `patch`, `validate`, and `export` responses include an `etag` when the server has a project revision. Pass the latest `etag` to `server patch --etag` to avoid overwriting another browser or agent. If validation is not needed for the workflow, export the project after patching and inspect the returned `content`.
+The `query`, `patch`, `validate`, and `export` responses include `etag` and `revisionToken` when the server has a project revision. Pass the latest token to `server patch --etag` to avoid overwriting another browser or agent. If validation is not needed for the workflow, export the project after patching and inspect the returned `content`.
 
 ### Web API Equivalents
 

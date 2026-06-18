@@ -3,10 +3,13 @@ import {
   exportMarkdown,
   exportMermaid,
   exportPgJson,
+  importMarkdown,
+  importMermaid,
+  pgJsonToArchive,
   queryArchive,
   validateProjectGraphPatchPayload,
 } from "@graphif/project-graph-core";
-import { readPrgData, writePrgData } from "@graphif/prg-codec";
+import { readPrgData, validatePrgArchive, writePrgData } from "@graphif/prg-codec";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -114,8 +117,8 @@ async function handleApi(req, res, requestUrl) {
         query: true,
         patch: true,
         export: true,
-        validate: false,
-        import: false,
+        validate: true,
+        import: true,
         history: true,
         restore: true,
         locks: true,
@@ -137,6 +140,13 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, 201, { project });
       return;
     }
+  }
+
+  if (segments.length === 3 && segments[1] === "projects" && segments[2] === "import" && req.method === "POST") {
+    const body = await readJson(req);
+    const project = await importProject(body);
+    sendJson(res, 201, { ok: true, project });
+    return;
   }
 
   if (segments.length >= 3 && segments[1] === "projects") {
@@ -183,7 +193,7 @@ async function handleApi(req, res, requestUrl) {
           return writeProjectBlob(id, content, { expectedEtag: ifMatch });
         });
         res.setHeader("ETag", etag);
-        sendJson(res, 200, { ok: true, etag });
+        sendJson(res, 200, { ok: true, etag, revisionToken: etag });
         return;
       }
     }
@@ -213,7 +223,7 @@ async function handleApi(req, res, requestUrl) {
           : graphQueryFromSearchParams(requestUrl.searchParams);
       const { archive, etag } = await readProjectArchive(id);
       res.setHeader("ETag", etag);
-      sendJson(res, 200, { ok: true, etag, result: queryArchive(archive, query) });
+      sendJson(res, 200, { ok: true, etag, revisionToken: etag, result: queryArchive(archive, query) });
       return;
     }
 
@@ -228,7 +238,30 @@ async function handleApi(req, res, requestUrl) {
             ? exportMarkdown(archive, root)
             : exportMermaid(archive);
       res.setHeader("ETag", etag);
-      sendJson(res, 200, { ok: true, etag, format, content });
+      sendJson(res, 200, { ok: true, etag, revisionToken: etag, format, content });
+      return;
+    }
+
+    if (segments.length === 4 && segments[3] === "validate" && req.method === "GET") {
+      let archive;
+      let etag;
+      try {
+        ({ archive, etag } = await readProjectArchive(id));
+      } catch (error) {
+        if (error?.statusCode === 404) throw error;
+        etag = await getProjectEtag(id);
+        const issue = {
+          severity: "error",
+          code: "invalid_project_blob",
+          message: error instanceof Error ? error.message : String(error),
+        };
+        if (etag) res.setHeader("ETag", etag);
+        sendJson(res, 200, { ok: false, issues: [issue], etag, revisionToken: etag });
+        return;
+      }
+      const report = validatePrgArchive(archive);
+      res.setHeader("ETag", etag);
+      sendJson(res, 200, { ...report, etag, revisionToken: etag });
       return;
     }
 
@@ -241,6 +274,7 @@ async function handleApi(req, res, requestUrl) {
 
       const body = await readJson(req);
       const patch = normalizeGraphPatch(body);
+      const revisionToken = graphRevisionToken(body);
       if (patch.baseRevision !== undefined) {
         sendError(
           res,
@@ -250,7 +284,7 @@ async function handleApi(req, res, requestUrl) {
         );
         return;
       }
-      const patchValidation = validateProjectGraphPatchPayload(patch);
+      const patchValidation = validateProjectGraphPatchPayload(patchWithoutRevisionToken(patch));
       if (!patchValidation.ok) {
         sendError(res, 400, "invalid_patch_payload", "Invalid Project Graph patch payload", {
           issues: patchValidation.issues,
@@ -258,7 +292,7 @@ async function handleApi(req, res, requestUrl) {
         return;
       }
 
-      const ifMatch = req.headers["if-match"];
+      const ifMatch = req.headers["if-match"] ?? req.headers["x-project-graph-revision"] ?? revisionToken;
       const response = await runProjectMutation(id, async () => {
         const lock = await getActiveLock(id);
         if (lock && lock.clientId !== clientId) {
@@ -267,10 +301,13 @@ async function handleApi(req, res, requestUrl) {
 
         const { archive, etag: currentEtag } = await readProjectArchive(id);
         if (ifMatch && !etagMatches(ifMatch, currentEtag)) {
-          throw createHttpError("Project revision does not match", 412, "etag_mismatch", { currentEtag });
+          throw createHttpError("Project revision does not match", 412, "etag_mismatch", {
+            currentEtag,
+            currentRevisionToken: currentEtag,
+          });
         }
 
-        const result = applyOperationsToArchive(archive, patch);
+        const result = applyOperationsToArchive(archive, patchWithoutRevisionToken(patch));
         const content = Buffer.from(
           await writePrgData(result.archive, { preserveExtraEntries: true, preserveThumbnail: true }),
         );
@@ -279,7 +316,7 @@ async function handleApi(req, res, requestUrl) {
       });
       const { etag, changed, warnings } = response;
       res.setHeader("ETag", etag);
-      sendJson(res, 200, { ok: true, etag, changed, warnings });
+      sendJson(res, 200, { ok: true, etag, revisionToken: etag, changed, warnings });
       return;
     }
 
@@ -293,7 +330,7 @@ async function handleApi(req, res, requestUrl) {
         return restoreProjectRevision(id, revision);
       });
       res.setHeader("ETag", etag);
-      sendJson(res, 200, { ok: true, etag });
+      sendJson(res, 200, { ok: true, etag, revisionToken: etag });
       return;
     }
   }
@@ -366,6 +403,32 @@ async function createProject(rawName) {
   return metadata[id];
 }
 
+async function importProject(body) {
+  const format = normalizeImportFormat(body?.format ?? inferImportFormat(body?.name ?? "project.pg.json"));
+  const content = typeof body?.content === "string" ? body.content : "";
+  if (!content) {
+    throw createHttpError("Import content is required", 400, "invalid_import_payload");
+  }
+  let archive;
+  try {
+    archive =
+      format === "pgjson"
+        ? pgJsonToArchive(JSON.parse(content))
+        : format === "markdown"
+          ? importMarkdown(content)
+          : importMermaid(content);
+  } catch (error) {
+    throw createHttpError("Invalid import content", 400, "invalid_import_payload", {
+      format,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const project = await createProject(body?.name);
+  const data = Buffer.from(await writePrgData(archive, { preserveExtraEntries: true, preserveThumbnail: true }));
+  const etag = await writeProjectBlob(project.id, data);
+  return { ...project, size: data.byteLength, etag, revisionToken: etag };
+}
+
 async function renameProject(id, rawName) {
   const metadata = await loadJson(metadataPath, {});
   if (!metadata[id]) {
@@ -435,7 +498,10 @@ async function writeProjectBlob(id, content, options = {}) {
   if (options.expectedEtag !== undefined) {
     const currentEtag = existing ? etagForBuffer(existing) : null;
     if (!currentEtag || !etagMatches(options.expectedEtag, currentEtag)) {
-      throw createHttpError("Project revision does not match", 412, "etag_mismatch", { currentEtag });
+      throw createHttpError("Project revision does not match", 412, "etag_mismatch", {
+        currentEtag,
+        currentRevisionToken: currentEtag,
+      });
     }
   }
   if (existing) {
@@ -605,7 +671,13 @@ async function serveStatic(res, pathname) {
 async function readJson(req) {
   const buffer = await readBinary(req, 1024 * 1024);
   if (buffer.byteLength === 0) return {};
-  return JSON.parse(buffer.toString("utf8"));
+  try {
+    return JSON.parse(buffer.toString("utf8"));
+  } catch (error) {
+    throw createHttpError("Invalid JSON request body", 400, "invalid_json", {
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function readBinary(req, limit = 200 * 1024 * 1024) {
@@ -613,7 +685,7 @@ async function readBinary(req, limit = 200 * 1024 * 1024) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.byteLength;
-    if (size > limit) throw new Error("Request body is too large");
+    if (size > limit) throw createHttpError("Request body is too large", 413, "request_body_too_large");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -641,6 +713,20 @@ function normalizeExportFormat(format) {
   error.statusCode = 400;
   error.code = "invalid_export_format";
   throw error;
+}
+
+function normalizeImportFormat(format) {
+  if (format === "pgjson" || format === "markdown" || format === "mermaid") {
+    return format;
+  }
+  throw createHttpError(`Unsupported import format: ${format}`, 400, "invalid_import_format");
+}
+
+function inferImportFormat(name) {
+  const lower = String(name).toLowerCase();
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
+  if (lower.endsWith(".mmd") || lower.endsWith(".mermaid")) return "mermaid";
+  return "pgjson";
 }
 
 function graphQueryFromSearchParams(searchParams) {
@@ -745,6 +831,20 @@ function normalizeGraphPatch(value) {
   throw error;
 }
 
+function graphRevisionToken(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return typeof value.revisionToken === "string" ? value.revisionToken : undefined;
+}
+
+function patchWithoutRevisionToken(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch) || !("revisionToken" in patch)) {
+    return patch;
+  }
+  const rest = { ...patch };
+  delete rest.revisionToken;
+  return rest;
+}
+
 function normalizeProjectName(name) {
   const normalized = String(name ?? "")
     .trim()
@@ -796,7 +896,10 @@ function createHttpError(message, statusCode, code, details = undefined) {
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", process.env.PG_WEB_ALLOWED_ORIGIN ?? "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,If-Match,X-Project-Graph-Client");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization,Content-Type,If-Match,X-Project-Graph-Client,X-Project-Graph-Revision",
+  );
   res.setHeader("Access-Control-Expose-Headers", "ETag");
 }
 

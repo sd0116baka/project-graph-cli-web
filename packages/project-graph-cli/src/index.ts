@@ -17,7 +17,6 @@ import {
 } from "@graphif/project-graph-core";
 import {
   inspectPrgArchive,
-  readPrgData,
   readPrgFile,
   validatePrgArchive,
   writePrgFile,
@@ -28,7 +27,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Command =
@@ -61,6 +60,7 @@ interface ParsedArgs {
   serverUrl?: string;
   serverUser?: string;
   serverPassword?: string;
+  projectName?: string;
   daemonDataDir?: string;
   daemonSkipBuild: boolean;
   daemonNoAuth: boolean;
@@ -93,6 +93,7 @@ Usage:
   project-graph server patch <project-id> <ops.json> [--url <url>] [--user <user> --password <password>] [--etag <etag>] [--json]
   project-graph server export <project-id> --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph server validate <project-id> [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph server import <input.pg.json|input.md|input.mmd> [--format pgjson|markdown|mermaid] [--name <project-name>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph target list [--url <url>] [--json]
   project-graph daemon start [--port <n>] [--data-dir <path>] [--user <user> --password <password>] [--no-auth] [--skip-build] [--json]
   project-graph daemon stop [--port <n>] [--json]
@@ -293,6 +294,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let serverUrl: string | undefined;
   let serverUser: string | undefined;
   let serverPassword: string | undefined;
+  let projectName: string | undefined;
   let daemonDataDir: string | undefined;
   let daemonSkipBuild = false;
   let daemonNoAuth = false;
@@ -340,6 +342,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       serverUser = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--password") {
       serverPassword = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--name") {
+      projectName = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--data-dir") {
       daemonDataDir = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--skip-build") {
@@ -384,6 +388,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       serverUrl,
       serverUser,
       serverPassword,
+      projectName,
       daemonDataDir,
       daemonSkipBuild,
       daemonNoAuth,
@@ -431,6 +436,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     serverUrl,
     serverUser,
     serverPassword,
+    projectName,
     daemonDataDir,
     daemonSkipBuild,
     daemonNoAuth,
@@ -587,6 +593,29 @@ function parsePatch(content: string): ProjectGraphPatch {
   throw new Error("Patch file must be an operation array or an object with an ops array.");
 }
 
+function parseServerPatch(content: string): ProjectGraphPatch & { revisionToken?: string } {
+  const parsed = JSON.parse(stripJsonBom(content)) as unknown;
+  const revisionToken =
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as { revisionToken?: unknown }).revisionToken
+      : undefined;
+  const patchForValidation =
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "revisionToken" in parsed
+      ? stripRevisionToken(parsed as Record<string, unknown>)
+      : parsed;
+  assertValidProjectGraphPatchPayload(patchForValidation);
+  const patch = Array.isArray(patchForValidation)
+    ? ({ ops: patchForValidation as ProjectGraphPatch["ops"] } satisfies ProjectGraphPatch)
+    : (patchForValidation as ProjectGraphPatch);
+  return typeof revisionToken === "string" ? { ...patch, revisionToken } : patch;
+}
+
+function stripRevisionToken(value: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...value };
+  delete rest.revisionToken;
+  return rest;
+}
+
 function stripJsonBom(content: string): string {
   return content.replace(/^\uFEFF/, "");
 }
@@ -728,13 +757,15 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
   if (subcommand === "patch") {
     const projectId = requirePositional(args, 1, "<project-id>");
     const patchFile = requirePositional(args, 2, "<ops.json>");
-    const patch = parsePatch(await readFile(patchFile, "utf8"));
+    const patch = parseServerPatch(await readFile(patchFile, "utf8"));
+    const revisionToken = args.etag ?? patch.revisionToken;
     const response = await sendServerJsonRequest<{
       ok: true;
       etag: string;
+      revisionToken?: string;
       changed: string[];
       warnings: string[];
-    }>("POST", `/api/projects/${encodeURIComponent(projectId)}/patch`, args, patch, args.etag);
+    }>("POST", `/api/projects/${encodeURIComponent(projectId)}/patch`, args, patch, revisionToken);
     if (args.json) {
       printJson(response);
     } else {
@@ -757,6 +788,7 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
     const response = await sendServerJsonRequest<{
       ok: true;
       etag: string;
+      revisionToken?: string;
       format: ExportFormat;
       content: string;
     }>("GET", `/api/projects/${encodeURIComponent(projectId)}/export?${params}`, args);
@@ -773,39 +805,52 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
 
   if (subcommand === "validate") {
     const projectId = requirePositional(args, 1, "<project-id>");
-    const response = await sendServerBinaryRequest(`/api/projects/${encodeURIComponent(projectId)}/blob`, args);
-    let archive: Awaited<ReturnType<typeof readPrgData>>;
-    try {
-      archive = await readPrgData(response.content);
-    } catch (error) {
-      throw new ProjectGraphServerError(
-        0,
-        "invalid_project_blob",
-        "Project Graph server returned an invalid .prg blob.",
-        {
-          etag: response.etag,
-          parseError: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
-    const report = validatePrgArchive(archive);
+    const report = await sendServerJsonRequest<
+      ReturnType<typeof validatePrgArchive> & {
+        etag?: string;
+        revisionToken?: string;
+      }
+    >("GET", `/api/projects/${encodeURIComponent(projectId)}/validate`, args);
     if (args.json) {
-      printJson({ ...report, etag: response.etag });
+      printJson(report);
     } else if (report.issues.length === 0) {
       console.log("OK");
-      if (response.etag) {
-        console.log(`etag: ${response.etag}`);
+      if (report.revisionToken ?? report.etag) {
+        console.log(`revisionToken: ${report.revisionToken ?? report.etag}`);
       }
     } else {
       for (const issue of report.issues) {
         const path = issue.path ? ` ${issue.path}` : "";
         console.log(`${issue.severity.toUpperCase()} ${issue.code}${path}: ${issue.message}`);
       }
-      if (response.etag) {
-        console.log(`etag: ${response.etag}`);
+      if (report.revisionToken ?? report.etag) {
+        console.log(`revisionToken: ${report.revisionToken ?? report.etag}`);
       }
     }
     return report.ok ? 0 : 1;
+  }
+
+  if (subcommand === "import") {
+    const file = requirePositional(args, 1, "<input>");
+    const format = requireImportFormat(args.format ?? inferImportFormat(file));
+    const content = await readFile(file, "utf8");
+    const response = await sendServerJsonRequest<{
+      ok: true;
+      project: ServerProject & { etag?: string; revisionToken?: string };
+    }>("POST", "/api/projects/import", args, {
+      name: args.projectName ?? basename(file),
+      format,
+      content,
+    });
+    if (args.json) {
+      printJson(response);
+    } else {
+      console.log(`${response.project.id} ${response.project.name}`);
+      if (response.project.revisionToken ?? response.project.etag) {
+        console.log(`revisionToken: ${response.project.revisionToken ?? response.project.etag}`);
+      }
+    }
+    return 0;
   }
 
   throw new Error(`Unknown server subcommand: ${subcommand}`);
@@ -1448,52 +1493,6 @@ async function sendServerJsonRequest<T>(
     throw new ProjectGraphServerError(response.status, code, message, record.details);
   }
   return data as T;
-}
-
-async function sendServerBinaryRequest(
-  pathAndQuery: string,
-  args: ParsedArgs,
-): Promise<{ content: Buffer; etag?: string }> {
-  const url = new URL(pathAndQuery, `${serverBaseUrl(args)}/`);
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/vnd.project-graph,application/json",
-        "X-Project-Graph-Client": "project-graph-cli",
-        ...serverAuthHeaders(args),
-      },
-    });
-  } catch (error) {
-    throw serverTransportError(url, error);
-  }
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!response.ok) {
-    const text = await response.text();
-    let data: unknown;
-    try {
-      data = text && contentType.includes("application/json") ? JSON.parse(text) : {};
-    } catch (error) {
-      throw new ProjectGraphServerError(
-        response.status,
-        "invalid_server_response",
-        "Project Graph server returned invalid JSON.",
-        {
-          body: text.slice(0, 1024),
-          parseError: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
-    const record = asRecord(data);
-    const code = typeof record.code === "string" ? record.code : "server_error";
-    const message = typeof record.error === "string" ? record.error : response.statusText;
-    throw new ProjectGraphServerError(response.status, code, message, record.details);
-  }
-  return {
-    content: Buffer.from(await response.arrayBuffer()),
-    etag: response.headers.get("etag") ?? undefined,
-  };
 }
 
 function serverTransportError(url: URL, error: unknown): ProjectGraphServerError {

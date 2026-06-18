@@ -127,8 +127,8 @@ function Write-WebBackendRegistryTarget {
       query = $true
       patch = $true
       export = $true
-      validate = $false
-      import = $false
+      validate = $true
+      import = $true
       history = $true
       restore = $true
       locks = $true

@@ -525,38 +525,88 @@ describe("@graphif/project-graph-cli", () => {
     expect(server.requests.every((request) => request.headers.authorization === "Basic cGc6c2VjcmV0")).toBe(true);
   });
 
-  it("validates a Web backend project as JSON", async () => {
+  it("imports and validates a Web backend project as JSON", async () => {
     const dir = await createTempDir();
     const markdown = join(dir, "outline.md");
-    const projectFile = join(dir, "server-project.prg");
     await writeFile(markdown, "# Intake\n\n## Review\n", "utf8");
-    expect((await runCli(["import", markdown, "--format", "markdown", "-o", projectFile])).code).toBe(0);
-    const projectContent = await readFile(projectFile);
     const server = await startHttpServer((request) => {
       const url = new URL(request.url, "http://127.0.0.1");
-      if (request.method === "GET" && url.pathname === "/api/projects/project-a/blob") {
+      if (request.method === "POST" && url.pathname === "/api/projects/import") {
+        expect(JSON.parse(request.body)).toMatchObject({
+          name: "Imported",
+          format: "markdown",
+          content: "# Intake\n\n## Review\n",
+        });
         return {
-          headers: {
-            "Content-Type": "application/vnd.project-graph",
-            ETag: '"etag-validate"',
+          status: 201,
+          body: {
+            ok: true,
+            project: { id: "project-a", name: "Imported", etag: '"etag-import"', revisionToken: '"etag-import"' },
           },
-          body: projectContent,
         };
+      }
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/validate") {
+        return {
+          body: { ok: true, etag: '"etag-validate"', revisionToken: '"etag-validate"', issues: [] },
+        };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+
+    const importResult = await runCli(["server", "import", markdown, "--url", url, "--name", "Imported", "--json"]);
+    const validateResult = await runCli(["server", "validate", "project-a", "--url", url, "--json"]);
+
+    expect(importResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(importResult.stdout)).toMatchObject({
+      ok: true,
+      project: { id: "project-a", revisionToken: '"etag-import"' },
+    });
+    expect(validateResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(validateResult.stdout)).toMatchObject({
+      ok: true,
+      etag: '"etag-validate"',
+      revisionToken: '"etag-validate"',
+      issues: [],
+    });
+  });
+
+  it("uses revisionToken from Web backend patch files", async () => {
+    const dir = await createTempDir();
+    const patchFile = join(dir, "ops-with-token.json");
+    await writeFile(
+      patchFile,
+      JSON.stringify({
+        revisionToken: '"etag-a"',
+        ops: [{ op: "rename_node", id: "node-a", text: "Alpha" }],
+      }),
+      "utf8",
+    );
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "POST" && url.pathname === "/api/projects/project-a/patch") {
+        expect(request.headers["if-match"]).toBe('"etag-a"');
+        expect(JSON.parse(request.body)).toMatchObject({
+          revisionToken: '"etag-a"',
+          ops: [{ op: "rename_node", id: "node-a" }],
+        });
+        return { body: { ok: true, etag: '"etag-b"', revisionToken: '"etag-b"', changed: ["node-a"], warnings: [] } };
       }
       return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
     });
 
     const result = await runCli([
       "server",
-      "validate",
+      "patch",
       "project-a",
+      patchFile,
       "--url",
       `http://127.0.0.1:${server.port}`,
       "--json",
     ]);
 
     expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, etag: '"etag-validate"', issues: [] });
+    expect(JSON.parse(result.stdout)).toMatchObject({ revisionToken: '"etag-b"', changed: ["node-a"] });
   });
 
   it("discovers backend targets from the local registry", async () => {
@@ -751,16 +801,17 @@ describe("@graphif/project-graph-cli", () => {
     });
   });
 
-  it("prints structured JSON when Web backend validation receives an invalid project blob", async () => {
+  it("returns backend validation reports with issues as JSON", async () => {
     const server = await startHttpServer((request) => {
       const url = new URL(request.url, "http://127.0.0.1");
-      if (request.method === "GET" && url.pathname === "/api/projects/project-a/blob") {
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/validate") {
         return {
-          headers: {
-            "Content-Type": "application/vnd.project-graph",
-            ETag: '"etag-invalid"',
+          body: {
+            ok: false,
+            etag: '"etag-invalid"',
+            revisionToken: '"etag-invalid"',
+            issues: [{ severity: "error", code: "invalid_archive", message: "Invalid archive" }],
           },
-          body: Buffer.from("not-a-prg"),
         };
       }
       return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
@@ -778,10 +829,9 @@ describe("@graphif/project-graph-cli", () => {
     expect(result).toMatchObject({ code: 1, stderr: "" });
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
-      status: 0,
-      code: "invalid_project_blob",
-      details: { etag: '"etag-invalid"' },
-      retry: { action: "inspect_error", retryable: false },
+      etag: '"etag-invalid"',
+      revisionToken: '"etag-invalid"',
+      issues: [{ code: "invalid_archive" }],
     });
   });
 

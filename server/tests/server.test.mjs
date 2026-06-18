@@ -40,6 +40,7 @@ describe("@graphif/project-graph-web-server", () => {
       port: server.port,
       authEnabled: false,
       customDataDir: true,
+      capabilities: { import: true, validate: true },
     });
     expect(info.body.dataDirName).toContain("project-graph-web-server-test-");
 
@@ -54,12 +55,112 @@ describe("@graphif/project-graph-web-server", () => {
     });
 
     expect(patch.response.status).toBe(200);
-    expect(patch.body).toMatchObject({ ok: true, changed: ["Review"] });
+    expect(patch.body).toMatchObject({ ok: true, revisionToken: expect.any(String), changed: ["Review"] });
 
     const blob = await getBlob(server, projectId);
     const archive = await readPrgData(blob);
     expect(archive.thumbnail).toEqual(originalArchive.thumbnail);
     expect(archive.extraEntries.get("agent-note.bin")).toEqual(new Uint8Array([4, 5, 6]));
+  });
+
+  it("imports and validates projects through the runtime API", async () => {
+    const server = await startServer();
+    const imported = await requestJson(server, "/api/projects/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Imported Runtime", format: "markdown", content: "# Intake\n\n## Review\n" }),
+    });
+
+    expect(imported.response.status).toBe(201);
+    expect(imported.body).toMatchObject({
+      ok: true,
+      project: {
+        name: "Imported Runtime",
+        etag: expect.any(String),
+        revisionToken: expect.any(String),
+      },
+    });
+
+    const projectId = imported.body.project.id;
+    const validation = await requestJson(server, `/api/projects/${projectId}/validate`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const query = await requestJson(server, `/api/projects/${projectId}/query?kind=node&text=Review`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const patch = await requestJson(server, `/api/projects/${projectId}/patch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Project-Graph-Client": "server-test",
+      },
+      body: JSON.stringify({
+        revisionToken: imported.body.project.revisionToken,
+        ops: [{ op: "rename_node", id: "Review", text: "Reviewed" }],
+      }),
+    });
+
+    expect(validation.response.status).toBe(200);
+    expect(validation.body).toMatchObject({ ok: true, revisionToken: imported.body.project.revisionToken });
+    expect(query.body).toMatchObject({
+      ok: true,
+      revisionToken: imported.body.project.revisionToken,
+      result: { total: 1 },
+    });
+    expect(patch.response.status).toBe(200);
+    expect(patch.body).toMatchObject({ ok: true, revisionToken: expect.any(String), changed: ["Review"] });
+  });
+
+  it("returns validation reports for corrupt project blobs", async () => {
+    const server = await startServer();
+    const projectId = await createProject(server);
+    await fetch(urlFor(server, `/api/projects/${projectId}/blob`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/vnd.project-graph", "X-Project-Graph-Client": "server-test" },
+      body: Buffer.from("not-a-prg"),
+    });
+
+    const validation = await requestJson(server, `/api/projects/${projectId}/validate`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+
+    expect(validation.response.status).toBe(200);
+    expect(validation.body).toMatchObject({
+      ok: false,
+      etag: expect.any(String),
+      revisionToken: expect.any(String),
+      issues: [{ code: "invalid_project_blob" }],
+    });
+  });
+
+  it("rejects invalid import payloads as request errors", async () => {
+    const server = await startServer();
+    const invalidPgJson = await requestJson(server, "/api/projects/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Invalid", format: "pgjson", content: "{not-json" }),
+    });
+    const invalidJson = await requestJson(server, "/api/projects/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: "{not-json",
+    });
+
+    expect(invalidPgJson.response.status).toBe(400);
+    expect(invalidPgJson.body).toMatchObject({ ok: false, code: "invalid_import_payload" });
+    expect(invalidJson.response.status).toBe(400);
+    expect(invalidJson.body).toMatchObject({ ok: false, code: "invalid_json" });
+  });
+
+  it("allows revision token headers through CORS preflight", async () => {
+    const server = await startServer();
+    const response = await fetch(urlFor(server, "/api/projects/project-a/patch"), {
+      method: "OPTIONS",
+      headers: { "Access-Control-Request-Headers": "X-Project-Graph-Revision" },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-headers")).toContain("X-Project-Graph-Revision");
   });
 
   it("allows only one concurrent patch for a shared ETag", async () => {
