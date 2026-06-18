@@ -1,6 +1,8 @@
 param(
   [int]$Port = 37820,
-  [string]$DataDir = ""
+  [string]$DataDir = "",
+  [string]$AuthUser = "",
+  [string]$AuthPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,11 +10,18 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+$Runtime = Read-WebRuntime -Root $Root
 $DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 $AuthPath = Join-Path $DataDir "auth.json"
 $Base = "http://127.0.0.1:$Port"
 
 function Get-AuthHeaders {
+  if ($AuthPassword) {
+    $User = if ($AuthUser) { $AuthUser } else { "pg" }
+    $Token = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$($User):$AuthPassword"))
+    return @{ Authorization = "Basic $Token" }
+  }
+
   if (-not (Test-Path $AuthPath)) {
     return @{}
   }
@@ -45,7 +54,23 @@ if (-not $Health.ok) {
 Write-Host "OK: health"
 
 $AuthHeaders = Get-AuthHeaders
-$HasAuth = $AuthHeaders.Count -gt 0
+$RuntimeMatchesDataDir = $false
+$RuntimeMatchesPort = $false
+if ($Runtime -and $Runtime.dataDir) {
+  $RuntimeMatchesDataDir = Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir
+}
+if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port")) {
+  $RuntimeMatchesPort = ([int]$Runtime.port -eq $Port)
+}
+$HasAuth = if ($RuntimeMatchesDataDir -and $RuntimeMatchesPort -and ($Runtime.PSObject.Properties.Name -contains "authEnabled")) {
+  [bool]$Runtime.authEnabled
+} else {
+  $AuthHeaders.Count -gt 0
+}
+
+if ($HasAuth -and $AuthHeaders.Count -eq 0) {
+  throw "Web runtime says authentication is enabled, but no credentials were provided and no auth.json credentials were found in $DataDir."
+}
 
 if ($HasAuth) {
   Expect-Status { Invoke-WebRequest -Uri "$Base/" -UseBasicParsing -TimeoutSec 5 } 401 "unauthenticated page"
@@ -53,8 +78,10 @@ if ($HasAuth) {
 }
 
 $Headers = @{}
-foreach ($Key in $AuthHeaders.Keys) {
-  $Headers[$Key] = $AuthHeaders[$Key]
+if ($HasAuth) {
+  foreach ($Key in $AuthHeaders.Keys) {
+    $Headers[$Key] = $AuthHeaders[$Key]
+  }
 }
 $Headers["X-Project-Graph-Client"] = "smoke-web"
 

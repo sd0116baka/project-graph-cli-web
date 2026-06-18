@@ -35,7 +35,7 @@
 .\status-web.cmd
 ```
 
-状态命令也会显示当前账号密码。密码保存在：
+状态命令会显示服务端口、局域网地址、数据目录，以及当前是否启用认证。启用认证时，账号密码保存在：
 
 ```text
 <DataDir>\auth.json
@@ -67,6 +67,12 @@ server\data
 
 ```powershell
 .\start-web.cmd -DataDir D:\ProjectGraphData
+```
+
+如果路径里有空格，参数要加引号：
+
+```powershell
+.\start-web.cmd -DataDir "C:\Users\<you>\Project Graph Data"
 ```
 
 `-DataDir` 可以是绝对路径，也可以是相对当前仓库根目录的路径：
@@ -113,7 +119,13 @@ server\web-runtime.json
 Project Graph Web
 ```
 
-它会运行 `scripts\start-web.ps1 -SkipBuild -Port 37820`，不会重新构建前端。
+它会运行 `scripts\start-web.ps1 -SkipBuild -Port 37820`，不会重新构建前端。隐藏启动的输出会写入：
+
+```text
+<DataDir>\logs\project-graph-web.log
+```
+
+日志不会写入明文密码。默认启动生成的密码保存在 `<DataDir>\auth.json`；如果启动时显式传了 `-AuthPassword`，使用启动时传入的密码。
 
 ## 数据位置
 
@@ -147,6 +159,12 @@ server\data\backups
 
 ```text
 <DataDir>\logs
+```
+
+普通前台启动会直接在当前窗口打印日志。如果需要把前台启动也写入文件，可以使用：
+
+```powershell
+.\start-web.cmd -LogPath "<DataDir>\logs\project-graph-web.log"
 ```
 
 `server\data` 和 `server\web-runtime.json` 已加入 `.gitignore`，不会被提交。自定义到仓库外的目录也不会被 Git 管理。
@@ -195,7 +213,7 @@ web-backups
 
 - 先校验备份包结构。
 - 先给当前 `<DataDir>` 再创建一份预恢复备份。
-- 停止当前 Web 服务。
+- 调用 `stop-web.cmd` 停止默认端口范围 `37820-37920` 内的 Project Graph Web 服务。
 - 替换 `<DataDir>`。
 - 重置 `locks.json`，避免恢复后残留旧编辑锁。
 
@@ -257,9 +275,16 @@ Web 欢迎页的服务器项目列表支持：
 .\smoke-web.cmd
 ```
 
+如果服务是用 `-AuthPassword` 显式密码启动、但没有写入 `auth.json`，测试时传入同一组凭据：
+
+```powershell
+.\smoke-web.cmd -AuthUser pg -AuthPassword <password>
+```
+
 测试内容包括：
 
 - health 是否正常。
 - 启用密码时，未认证访问是否返回 401。
 - 正确密码是否能访问首页和 API。
-- 临时项目创建、重命名、删除是否正常。
+- 临时项目创建、重命名、查询、patch、导出、删除是否正常。
+- 锁冲突、ETag 冲突、非法 patch 是否返回预期错误。

@@ -4,7 +4,8 @@ param(
   [switch]$NoAuth,
   [string]$AuthUser = "pg",
   [string]$AuthPassword = "",
-  [string]$DataDir = ""
+  [string]$DataDir = "",
+  [string]$LogPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,20 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 Set-Location $Root
+
+if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+  $LogPath = [IO.Path]::GetFullPath($LogPath)
+  New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force | Out-Null
+  Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value ""
+  Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "[$((Get-Date).ToUniversalTime().ToString("o"))] Project Graph Web startup"
+}
+
+function Write-WebLine([string]$Message = "") {
+  Write-Host $Message
+  if ($LogPath) {
+    Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value $Message
+  }
+}
 
 function Test-PortBusy([int]$Value) {
   try {
@@ -89,6 +104,8 @@ function New-RandomPassword {
   return -join ($Bytes | ForEach-Object { $Chars[$_ % $Chars.Length] })
 }
 
+try {
+
 if (-not $SkipBuild) {
   pnpm run web:build
 }
@@ -137,21 +154,45 @@ if (-not $NoAuth) {
   Remove-Item Env:\PG_WEB_AUTH_PASSWORD -ErrorAction SilentlyContinue
 }
 
-Write-Host ""
-Write-Host "Project Graph Web is starting..."
-Write-Host "Local:  http://127.0.0.1:$SelectedPort"
-Write-Host "LAN:    http://$LanIp`:$SelectedPort"
-Write-Host "Data:   $DataDir"
+Write-WebLine ""
+Write-WebLine "Project Graph Web is starting..."
+Write-WebLine "Local:  http://127.0.0.1:$SelectedPort"
+Write-WebLine "LAN:    http://$LanIp`:$SelectedPort"
+Write-WebLine "Data:   $DataDir"
 if (-not $NoAuth) {
-  Write-Host "User:   $AuthUser"
-  Write-Host "Pass:   $AuthPassword"
+  Write-WebLine "User:   $AuthUser"
+  if ($LogPath) {
+    if (Test-Path $AuthPath) {
+      Write-WebLine "Pass:   saved in $AuthPath"
+    } else {
+      Write-WebLine "Pass:   configured by startup arguments; not logged"
+    }
+  } else {
+    Write-WebLine "Pass:   $AuthPassword"
+  }
 } else {
-  Write-Host "Auth:   disabled"
+  Write-WebLine "Auth:   disabled"
 }
-Write-Host ""
-Write-Host "Keep this window open. Press Ctrl+C to stop."
-Write-Host ""
+Write-WebLine ""
+Write-WebLine "Keep this window open. Press Ctrl+C to stop."
+if ($LogPath) {
+  Write-WebLine "Log:    $LogPath"
+}
+Write-WebLine ""
 
 Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser
 
-node server/src/server.js
+if ($LogPath) {
+  & node server/src/server.js 2>&1 | Tee-Object -FilePath $LogPath -Append
+} else {
+  node server/src/server.js
+}
+if ($LASTEXITCODE -ne 0) {
+  throw "Web server exited with code $LASTEXITCODE"
+}
+} catch {
+  if ($LogPath) {
+    Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "ERROR: $($_.Exception.Message)"
+  }
+  throw
+}

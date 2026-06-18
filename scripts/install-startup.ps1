@@ -13,10 +13,11 @@ $StartScript = Join-Path $ScriptDir "start-web.ps1"
 $ResolvedDataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 Assert-SafeWebDataDir -Root $Root -DataDir $ResolvedDataDir
 $LogDir = Join-Path $ResolvedDataDir "logs"
+$LogPath = Join-Path $LogDir "project-graph-web.log"
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
 $PowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$StartScript`" -SkipBuild -Port $Port"
+$Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$StartScript`" -SkipBuild -Port $Port -LogPath `"$LogPath`""
 if ($ResolvedDataDir) {
   $Arguments += " -DataDir `"$ResolvedDataDir`""
 }
@@ -42,6 +43,7 @@ Write-Host "Installed scheduled task: $TaskName"
 Write-Host "Trigger: current user logon"
 Write-Host "Port: $Port"
 Write-Host "Data directory: $ResolvedDataDir"
+Write-Host "Log file: $LogPath"
 Write-Host "Start script: $StartScript"
 
 $Task = Get-ScheduledTask -TaskName $TaskName

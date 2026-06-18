@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+$Runtime = Read-WebRuntime -Root $Root
 $DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 $AuthPath = Join-Path $DataDir "auth.json"
 
@@ -82,14 +83,29 @@ $Running = foreach ($Connection in $Ports) {
   } else {
     $null
   }
+  $RuntimeMatchesDataDir = $false
+  $RuntimeMatchesPort = $false
+  $RuntimeAuthEnabled = $null
+  if ($Runtime -and $Runtime.dataDir) {
+    $RuntimeMatchesDataDir = Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir
+  }
+  if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port")) {
+    $RuntimeMatchesPort = ([int]$Runtime.port -eq [int]$Connection.LocalPort)
+  }
+  if ($RuntimeMatchesDataDir -and $RuntimeMatchesPort -and ($Runtime.PSObject.Properties.Name -contains "authEnabled")) {
+    $RuntimeAuthEnabled = [bool]$Runtime.authEnabled
+  }
+  $AuthEnabled = if ($null -ne $RuntimeAuthEnabled) { $RuntimeAuthEnabled } else { [bool]$AuthConfig }
+
   [pscustomobject]@{
     Pid = $Connection.OwningProcess
     Port = $Connection.LocalPort
     LocalUrl = "http://127.0.0.1:$($Connection.LocalPort)"
     LanUrl = "http://$(Get-LanIp):$($Connection.LocalPort)"
     DataDir = $DataDir
-    AuthUser = if ($AuthConfig) { $AuthConfig.user } else { "" }
-    AuthPassword = if ($AuthConfig) { $AuthConfig.password } else { "" }
+    AuthEnabled = $AuthEnabled
+    AuthUser = if ($AuthEnabled -and $AuthConfig) { $AuthConfig.user } else { "" }
+    AuthPassword = if ($AuthEnabled -and $AuthConfig) { $AuthConfig.password } else { "" }
     CommandLine = $Process.CommandLine
   }
 }

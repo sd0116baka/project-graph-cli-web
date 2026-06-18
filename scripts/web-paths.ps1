@@ -12,19 +12,49 @@ function Resolve-WebDataDir {
     return [IO.Path]::GetFullPath((Join-Path $Root $DataDir))
   }
 
-  $RuntimePath = Get-WebRuntimePath -Root $Root
-  if (Test-Path $RuntimePath) {
-    try {
-      $Runtime = Get-Content -Raw $RuntimePath | ConvertFrom-Json
-      if ($Runtime.dataDir) {
-        return [IO.Path]::GetFullPath([string]$Runtime.dataDir)
-      }
-    } catch {
-      # Ignore stale or partial runtime metadata and fall back to the default.
-    }
+  $Runtime = Read-WebRuntime -Root $Root
+  if ($Runtime -and $Runtime.dataDir) {
+    return [IO.Path]::GetFullPath([string]$Runtime.dataDir)
   }
 
   return [IO.Path]::GetFullPath((Join-Path $Root "server\data"))
+}
+
+function Read-WebRuntime {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Root
+  )
+
+  $RuntimePath = Get-WebRuntimePath -Root $Root
+  if (-not (Test-Path $RuntimePath)) {
+    return $null
+  }
+
+  try {
+    return Get-Content -Raw $RuntimePath | ConvertFrom-Json
+  } catch {
+    Write-Warning "Ignoring unreadable Web runtime metadata at $RuntimePath. $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-SameWebPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Left,
+    [Parameter(Mandatory = $true)]
+    [string]$Right
+  )
+
+  try {
+    $LeftFull = [IO.Path]::GetFullPath($Left).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $RightFull = [IO.Path]::GetFullPath($Right).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    return $LeftFull.Equals($RightFull, [StringComparison]::OrdinalIgnoreCase)
+  } catch {
+    Write-Warning "Could not compare paths '$Left' and '$Right'. $($_.Exception.Message)"
+    return $false
+  }
 }
 
 function Get-WebRuntimePath {
