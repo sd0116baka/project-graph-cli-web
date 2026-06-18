@@ -61,6 +61,9 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
             color: {
               $ref: "#/$defs/color",
             },
+            section: {
+              $ref: "#/$defs/objectId",
+            },
           },
         },
         {
@@ -130,6 +133,246 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
         {
           type: "object",
           additionalProperties: false,
+          required: ["op", "text"],
+          properties: {
+            op: {
+              const: "add_section",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            text: {
+              type: "string",
+            },
+            position: {
+              $ref: "#/$defs/point",
+            },
+            size: {
+              $ref: "#/$defs/size",
+            },
+            detailsMarkdown: {
+              type: "string",
+            },
+            color: {
+              $ref: "#/$defs/color",
+            },
+            collapsed: {
+              type: "boolean",
+            },
+            locked: {
+              type: "boolean",
+            },
+            children: {
+              $ref: "#/$defs/objectIdArray",
+            },
+            section: {
+              $ref: "#/$defs/objectId",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "text"],
+          properties: {
+            op: {
+              const: "set_section_text",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            text: {
+              type: "string",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "markdown"],
+          properties: {
+            op: {
+              const: "set_section_details_markdown",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            markdown: {
+              type: "string",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "collapsed"],
+          properties: {
+            op: {
+              const: "set_section_collapsed",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            collapsed: {
+              type: "boolean",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "locked"],
+          properties: {
+            op: {
+              const: "set_section_locked",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            locked: {
+              type: "boolean",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "children"],
+          properties: {
+            op: {
+              const: "set_section_children",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            children: {
+              $ref: "#/$defs/objectIdArray",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "children"],
+          properties: {
+            op: {
+              const: "add_to_section",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            children: {
+              $ref: "#/$defs/objectIdArray",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id", "children"],
+          properties: {
+            op: {
+              const: "remove_from_section",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            children: {
+              $ref: "#/$defs/objectIdArray",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "dataBase64"],
+          properties: {
+            op: {
+              const: "add_image_node",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            attachmentId: {
+              $ref: "#/$defs/objectId",
+            },
+            dataBase64: {
+              type: "string",
+            },
+            extension: {
+              type: "string",
+            },
+            path: {
+              type: "string",
+            },
+            position: {
+              $ref: "#/$defs/point",
+            },
+            size: {
+              $ref: "#/$defs/size",
+            },
+            scale: {
+              type: "number",
+              exclusiveMinimum: 0,
+            },
+            isBackground: {
+              type: "boolean",
+            },
+            detailsMarkdown: {
+              type: "string",
+            },
+            section: {
+              $ref: "#/$defs/objectId",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "dataBase64"],
+          properties: {
+            op: {
+              const: "add_svg_node",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            attachmentId: {
+              $ref: "#/$defs/objectId",
+            },
+            dataBase64: {
+              type: "string",
+            },
+            extension: {
+              type: "string",
+            },
+            path: {
+              type: "string",
+            },
+            position: {
+              $ref: "#/$defs/point",
+            },
+            size: {
+              $ref: "#/$defs/size",
+            },
+            scale: {
+              type: "number",
+              exclusiveMinimum: 0,
+            },
+            color: {
+              $ref: "#/$defs/color",
+            },
+            detailsMarkdown: {
+              type: "string",
+            },
+            section: {
+              $ref: "#/$defs/objectId",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
           required: ["op", "source", "target"],
           properties: {
             op: {
@@ -169,6 +412,71 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
             },
             text: {
               type: "string",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "id"],
+          properties: {
+            op: {
+              const: "set_edge_style",
+            },
+            id: {
+              $ref: "#/$defs/objectId",
+            },
+            text: {
+              type: "string",
+            },
+            lineType: {
+              type: "string",
+              description: "Common values are solid, dashed, and double.",
+            },
+            color: {
+              $ref: "#/$defs/color",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op", "ids", "delta"],
+          properties: {
+            op: {
+              const: "move_objects",
+            },
+            ids: {
+              $ref: "#/$defs/objectIdArray",
+            },
+            delta: {
+              $ref: "#/$defs/point",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["op"],
+          properties: {
+            op: {
+              const: "layout_grid",
+            },
+            ids: {
+              $ref: "#/$defs/objectIdArray",
+            },
+            origin: {
+              $ref: "#/$defs/point",
+            },
+            columns: {
+              type: "integer",
+              minimum: 1,
+            },
+            gap: {
+              $ref: "#/$defs/size",
+            },
+            cell: {
+              $ref: "#/$defs/size",
             },
           },
         },
@@ -238,6 +546,12 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
     objectId: {
       type: "string",
       minLength: 1,
+    },
+    objectIdArray: {
+      type: "array",
+      items: {
+        $ref: "#/$defs/objectId",
+      },
     },
     point: {
       type: "object",
