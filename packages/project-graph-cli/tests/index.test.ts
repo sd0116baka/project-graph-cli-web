@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { PROJECT_GRAPH_OPS_SCHEMA, archiveToPgJson } from "@graphif/project-graph-core";
 import { readPrgFile } from "@graphif/prg-codec";
@@ -194,6 +195,37 @@ describe("@graphif/project-graph-cli", () => {
       },
     });
     expect(JSON.parse(result.stdout)).toMatchObject({ changed: ["node-a"], revision: 8 });
+  });
+
+  it("opens a live document by normalized file uri", async () => {
+    const dir = await createTempDir();
+    const projectFile = join(dir, "graph.prg");
+    const server = await startLiveServer(() => ({
+      opened: true,
+      document: { id: pathToFileURL(resolve(projectFile)).toString(), revision: 0 },
+    }));
+
+    const result = await runCli([
+      "live",
+      "open",
+      projectFile,
+      "--port",
+      String(server.port),
+      "--token",
+      "secret",
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]).toMatchObject({
+      token: "secret",
+      method: "open_document",
+      params: {
+        uri: pathToFileURL(resolve(projectFile)).toString(),
+      },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ opened: true });
   });
 
   it("unwraps live export content unless json output is requested", async () => {

@@ -23,7 +23,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Command = "inspect" | "validate" | "export" | "import" | "patch" | "upgrade" | "schema" | "live" | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
@@ -57,6 +57,7 @@ Usage:
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
+  project-graph live open <file.prg|file-uri> [--json]
   project-graph live inspect [--document <id>] [--json]
   project-graph live export --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--document <id>] [--json]
   project-graph live patch <ops.json> [--document <id>] [--base-revision <n>] [--json] [--no-save]
@@ -414,6 +415,13 @@ async function handleLiveCommand(args: ParsedArgs): Promise<number> {
     return response.ok ? 0 : 1;
   }
 
+  if (subcommand === "open") {
+    const target = requirePositional(args, 1, "<file.prg|file-uri>");
+    const response = await sendLiveRequest("open_document", { uri: normalizeLiveDocumentUri(target) }, args);
+    printLiveResult(response, args.json);
+    return response.ok ? 0 : 1;
+  }
+
   if (subcommand === "inspect") {
     const response = await sendLiveRequest("inspect", { document: args.document }, args);
     printLiveResult(response, args.json);
@@ -463,6 +471,17 @@ function getLiveExportContent(result: unknown): string {
     return record.content;
   }
   return JSON.stringify(result, null, 2);
+}
+
+function normalizeLiveDocumentUri(target: string): string {
+  if (looksLikeUri(target)) {
+    return target;
+  }
+  return pathToFileURL(resolve(target)).toString();
+}
+
+function looksLikeUri(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) && !/^[a-zA-Z]:[\\/]/.test(value);
 }
 
 function withCliBaseRevision(patch: ProjectGraphPatch, baseRevision: number | undefined): ProjectGraphPatch {
