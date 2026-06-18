@@ -36,7 +36,7 @@ import ToolbarContent from "./components/toolbar-content";
 import { KeyBindsUI } from "./core/service/controlService/shortcutKeysEngine/KeyBindsUI";
 import { checkAndFixShortcutStorage } from "./core/service/controlService/shortcutKeysEngine/ShortcutKeyFixer";
 import { cn } from "./utils/cn";
-import { isMac, isWindows } from "./utils/platform";
+import { isMac, isWeb, isWindows } from "./utils/platform";
 
 export default function App() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -119,19 +119,22 @@ export default function App() {
       setUiScalePercent(value);
     });
 
-    // 恢复窗口位置大小
-    restoreStateCurrent(StateFlags.SIZE | StateFlags.POSITION | StateFlags.MAXIMIZED);
+    let unlistenWindowResize: Promise<() => void> | undefined;
+    if (!isWeb) {
+      // 恢复窗口位置大小
+      restoreStateCurrent(StateFlags.SIZE | StateFlags.POSITION | StateFlags.MAXIMIZED);
 
-    // setIsWide(window.innerWidth / window.innerHeight > 1.8);
-
-    const unlisten1 = getCurrentWindow().onResized(() => {
-      if (!isOnResizedDisabled.current) {
-        isMaximizedWorkaround();
-      }
       // setIsWide(window.innerWidth / window.innerHeight > 1.8);
-    });
 
-    if (!telemetryEventSent) {
+      unlistenWindowResize = getCurrentWindow().onResized(() => {
+        if (!isOnResizedDisabled.current) {
+          isMaximizedWorkaround();
+        }
+        // setIsWide(window.innerWidth / window.innerHeight > 1.8);
+      });
+    }
+
+    if (!isWeb && !telemetryEventSent) {
       setTelemetryEventSent(true);
       (async () => {
         const cpu = await cpuInfo();
@@ -147,28 +150,34 @@ export default function App() {
     }
 
     // 加载完成了，显示窗口
-    if (!window.ipc_bridge) {
+    if (!isWeb && !window.ipc_bridge) {
       getCurrentWindow().show();
     }
     // 关闭splash
-    getAllWindows().then((windows) => {
-      const splash = windows.find((w) => w.label === "splash");
-      if (splash) {
-        splash.close();
-      }
-    });
+    if (!isWeb) {
+      getAllWindows().then((windows) => {
+        const splash = windows.find((w) => w.label === "splash");
+        if (splash) {
+          splash.close();
+        }
+      });
+    }
 
     // 初始化全局快捷键管理
-    globalShortcutManager.init();
+    if (!isWeb) {
+      globalShortcutManager.init();
+    }
 
     return () => {
-      unlisten1?.then((f) => f());
+      unlistenWindowResize?.then((f) => f());
       KeyBindsUI.uiStopListen();
       // 清理全局快捷键资源
       unwatchShowQuickSettingsToolbar();
       unwatchWindowBackgroundAlpha();
       unwatchUiScale();
-      globalShortcutManager.dispose();
+      if (!isWeb) {
+        globalShortcutManager.dispose();
+      }
     };
   }, []);
 
@@ -210,52 +219,54 @@ export default function App() {
     /**
      * 关闭窗口时的事件监听
      */
-    getCurrentWindow()
-      .onCloseRequested(async (e) => {
-        e.preventDefault();
+    if (!isWeb) {
+      getCurrentWindow()
+        .onCloseRequested(async (e) => {
+          e.preventDefault();
 
-        // 检查是否有未保存的项目
-        const unsavedTabs = tabs.filter(
-          (tab): tab is Project =>
-            tab instanceof Project &&
-            (tab.projectState === ProjectState.Unsaved || tab.projectState === ProjectState.Stashed),
-        );
-
-        if (unsavedTabs.length > 0) {
-          // 弹出警告对话框
-          const response = await Dialog.buttons(
-            "检测到未保存文件",
-            `当前有 ${unsavedTabs.length} 个未保存的文件。直接关闭可能有文件被清空的风险，建议先手动保存文件。`,
-            [
-              { id: "cancel", label: "取消", variant: "ghost" },
-              { id: "continue", label: "继续关闭", variant: "destructive" },
-            ],
+          // 检查是否有未保存的项目
+          const unsavedTabs = tabs.filter(
+            (tab): tab is Project =>
+              tab instanceof Project &&
+              (tab.projectState === ProjectState.Unsaved || tab.projectState === ProjectState.Stashed),
           );
 
-          if (response === "cancel") {
-            // 用户选择取消关闭，返回
+          if (unsavedTabs.length > 0) {
+            // 弹出警告对话框
+            const response = await Dialog.buttons(
+              "检测到未保存文件",
+              `当前有 ${unsavedTabs.length} 个未保存的文件。直接关闭可能有文件被清空的风险，建议先手动保存文件。`,
+              [
+                { id: "cancel", label: "取消", variant: "ghost" },
+                { id: "continue", label: "继续关闭", variant: "destructive" },
+              ],
+            );
+
+            if (response === "cancel") {
+              // 用户选择取消关闭，返回
+              return;
+            }
+            // 用户选择继续关闭，执行原有关闭流程
+          }
+
+          try {
+            for (const tab of tabs) {
+              console.log("尝试关闭", tab);
+              await closeTab(tab);
+            }
+          } catch {
+            Telemetry.event("关闭应用提示是否保存文件选择了取消");
             return;
           }
-          // 用户选择继续关闭，执行原有关闭流程
-        }
-
-        try {
-          for (const tab of tabs) {
-            console.log("尝试关闭", tab);
-            await closeTab(tab);
-          }
-        } catch {
-          Telemetry.event("关闭应用提示是否保存文件选择了取消");
-          return;
-        }
-        Telemetry.event("关闭应用");
-        // 保存窗口位置
-        await saveWindowState(StateFlags.SIZE | StateFlags.POSITION | StateFlags.MAXIMIZED);
-        await getCurrentWindow().destroy();
-      })
-      .then((it) => {
-        unlisten1 = it;
-      });
+          Telemetry.event("关闭应用");
+          // 保存窗口位置
+          await saveWindowState(StateFlags.SIZE | StateFlags.POSITION | StateFlags.MAXIMIZED);
+          await getCurrentWindow().destroy();
+        })
+        .then((it) => {
+          unlisten1 = it;
+        });
+    }
 
     for (const tab of tabs) {
       tab.on("state-change", () => {
@@ -375,7 +386,7 @@ export default function App() {
               data-tauri-drag-region
             />
             <ThemeModeSwitch />
-            {!isMac && <WindowButtons />}
+            {!isWeb && !isMac && <WindowButtons />}
           </div>
 
           <ProjectTabs
@@ -418,7 +429,7 @@ export default function App() {
             onClick={() => getCurrentWindow().close()}
           ></div>
         )}
-        {activeTab instanceof Project ? <DropWindowCover project={activeTab} /> : null}
+        {!isWeb && activeTab instanceof Project ? <DropWindowCover project={activeTab} /> : null}
       </div>
     </>
   );

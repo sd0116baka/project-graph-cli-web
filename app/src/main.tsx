@@ -159,6 +159,9 @@ async function renderApp(cli: boolean = false) {
 }
 
 async function loadStartFile() {
+  if (isWeb) {
+    return;
+  }
   const cliMatches = await getMatches();
   const argPath = cliMatches.args.path.value as string | undefined;
   if (argPath) {

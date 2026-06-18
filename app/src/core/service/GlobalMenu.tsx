@@ -40,7 +40,7 @@ import SettingsWindow from "@/sub/SettingsWindow";
 import TagWindow from "@/sub/TagWindow";
 import TestWindow from "@/sub/TestWindow";
 import { openTextImportWindow } from "@/sub/TextImportWindow";
-import { getDeviceId } from "@/utils/otherApi";
+import { getAppVersion, getDeviceId } from "@/utils/otherApi";
 import { PathString } from "@/utils/pathString";
 import { isMac } from "@/utils/platform";
 import { ensurePrgThumbnailCached } from "@/utils/readPrgThumbnail";
@@ -49,7 +49,6 @@ import { Color, Vector } from "@graphif/data-structures";
 import { deserialize, serialize } from "@graphif/serializer";
 import { Rectangle } from "@graphif/shapes";
 import { Decoder, Encoder } from "@msgpack/msgpack";
-import { getVersion } from "@tauri-apps/api/app";
 import { appCacheDir, dataDir, join, tempDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -139,6 +138,8 @@ import { toast } from "sonner";
 import { URI } from "vscode-uri";
 import { FileSystemProviderDraft } from "../fileSystemProvider/FileSystemProviderDraft";
 import { FileSystemProviderFile } from "../fileSystemProvider/FileSystemProviderFile";
+import { FileSystemProviderServer } from "../fileSystemProvider/FileSystemProviderServer";
+import { ServerProjectManager } from "./dataFileService/ServerProjectManager";
 import { ProjectUpgrader } from "../stage/ProjectUpgrader";
 import { Entity } from "../stage/stageObject/abstract/StageEntity";
 import { LineEdge } from "../stage/stageObject/association/LineEdge";
@@ -218,7 +219,7 @@ export function GlobalMenu() {
   async function refresh() {
     await RecentFileManager.sortTimeRecentFiles();
     setRecentFiles(await RecentFileManager.getRecentFiles());
-    const ver = await getVersion();
+    const ver = await getAppVersion();
     setVersion(ver);
     setIsUnstableVersion(
       ver.includes("alpha") ||
@@ -1744,6 +1745,32 @@ export async function onNewDraft() {
   store.set(activeTabAtom, project);
 }
 
+export async function onNewServerProject(name: string) {
+  const serverProject = await ServerProjectManager.createProject(name);
+  let project: Project | undefined;
+  try {
+    await ServerProjectManager.lockProject(serverProject.id);
+    project = new Project(ServerProjectManager.projectUri(serverProject.id));
+    loadAllServicesBeforeInit(project);
+    await project.init();
+    loadAllServicesAfterInit(project);
+    await project.save({ includeThumbnail: false });
+    await RecentFileManager.addRecentFileByUri(project.uri);
+    store.set(tabsAtom, [...store.get(tabsAtom), project]);
+    store.set(activeTabAtom, project);
+    return project;
+  } catch (error) {
+    await project?.dispose().catch(() => undefined);
+    await ServerProjectManager.unlockProject(serverProject.id).catch(() => undefined);
+    await ServerProjectManager.removeProject(serverProject.id).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function onOpenServerProject(id: string, source: string = "server-project-list") {
+  return onOpenFile(ServerProjectManager.projectUri(id), source);
+}
+
 export async function onOpenFile(uri?: URI, source: string = "unknown"): Promise<Project | undefined> {
   if (!uri) {
     const path = await open({
@@ -1753,6 +1780,11 @@ export async function onOpenFile(uri?: URI, source: string = "unknown"): Promise
     });
     if (!path) return;
     uri = URI.file(path);
+  }
+
+  const serverProjectId = uri.scheme === "server" ? ServerProjectManager.projectIdFromUri(uri) : undefined;
+  if (serverProjectId) {
+    await ServerProjectManager.lockProject(serverProjectId);
   }
 
   if (
@@ -1779,20 +1811,22 @@ export async function onOpenFile(uri?: URI, source: string = "unknown"): Promise
     return tab as any;
   }
 
-  const dummyProject = new Project(uri);
-  loadAllServicesBeforeInit(dummyProject);
-  const tab = await TabFactory.create(uri, dummyProject.fs);
-  const t = performance.now();
-  if (tab instanceof Project) {
-    loadAllServicesBeforeInit(tab);
-  } else {
-    // Extension 只加载必要的基础服务
-    tab.registerFileSystemProvider("file", FileSystemProviderFile);
-    tab.registerFileSystemProvider("draft", FileSystemProviderDraft);
-  }
-  const loadServiceTime = performance.now() - t;
-
+  let tab: Project | Extension;
   try {
+    const dummyProject = new Project(uri);
+    loadAllServicesBeforeInit(dummyProject);
+    tab = await TabFactory.create(uri, dummyProject.fs);
+    const t = performance.now();
+    if (tab instanceof Project) {
+      loadAllServicesBeforeInit(tab);
+    } else {
+      // Extension 只加载必要的基础服务
+      tab.registerFileSystemProvider("file", FileSystemProviderFile);
+      tab.registerFileSystemProvider("draft", FileSystemProviderDraft);
+      tab.registerFileSystemProvider("server", FileSystemProviderServer);
+    }
+    const loadServiceTime = performance.now() - t;
+
     await toast
       .promise(
         async () => {
@@ -1911,12 +1945,15 @@ export async function onOpenFile(uri?: URI, source: string = "unknown"): Promise
       )
       .unwrap();
   } catch (e) {
+    if (serverProjectId) {
+      await ServerProjectManager.unlockProject(serverProjectId).catch(() => undefined);
+    }
     if (e instanceof Error && e.message === "USER_CANCELLED") {
       return undefined; // 用户取消，静默处理
     }
     throw e;
   }
-  return tab as any;
+  return tab! as any;
 }
 
 /**
