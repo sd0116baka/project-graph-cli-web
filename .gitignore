@@ -22,6 +22,10 @@ backup_*
 # mac下开发需要忽略
 .DS_Store
 
+server/data/
+server/*.log
+web-backups/
+
 
 
 .nx/cache

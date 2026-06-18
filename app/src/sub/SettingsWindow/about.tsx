@@ -1,6 +1,7 @@
 import logoUrl from "@/assets/icon.png";
 import { Dialog } from "@/components/ui/dialog";
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersion } from "@/utils/otherApi";
+import { isWeb } from "@/utils/platform";
 import { open } from "@tauri-apps/plugin-shell";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -12,7 +13,7 @@ export default function AboutTab() {
 
   useEffect(() => {
     (async () => {
-      setAppVersion(await getVersion());
+      setAppVersion(await getAppVersion());
     })();
   }, []);
   useEffect(() => {
@@ -73,12 +74,15 @@ export default function AboutTab() {
         </div>
         <div className="cursor-pointer rounded-md border p-4 **:cursor-pointer">
           <div className="text-xs opacity-50">官网与仓库</div>
-          <div className="mt-1 font-medium underline underline-offset-4" onClick={() => open("https://graphif.dev/")}>
+          <div
+            className="mt-1 font-medium underline underline-offset-4"
+            onClick={() => openExternal("https://graphif.dev/")}
+          >
             graphif.dev
           </div>
           <div
             className="mt-1 font-medium underline underline-offset-4"
-            onClick={() => open("https://github.com/graphif/project-graph")}
+            onClick={() => openExternal("https://github.com/graphif/project-graph")}
           >
             graphif/project-graph
           </div>
@@ -92,8 +96,19 @@ export default function AboutTab() {
 
 const Author: React.FC<{ name: string; url: string }> = ({ name, url }: { name: string; url: string }) => {
   return (
-    <span className="mt-1 font-medium underline underline-offset-4 hover:cursor-pointer" onClick={() => open(url)}>
+    <span
+      className="mt-1 font-medium underline underline-offset-4 hover:cursor-pointer"
+      onClick={() => openExternal(url)}
+    >
       {name}
     </span>
   );
 };
+
+function openExternal(url: string): void {
+  if (isWeb) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  } else {
+    void open(url);
+  }
+}

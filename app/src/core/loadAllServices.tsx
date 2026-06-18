@@ -1,5 +1,6 @@
 import { FileSystemProviderDraft } from "@/core/fileSystemProvider/FileSystemProviderDraft";
 import { FileSystemProviderFile } from "@/core/fileSystemProvider/FileSystemProviderFile";
+import { FileSystemProviderServer } from "@/core/fileSystemProvider/FileSystemProviderServer";
 import { Project } from "@/core/Project";
 import { CurveRenderer } from "@/core/render/canvas2d/basicRenderer/curveRenderer";
 import { ImageRenderer } from "@/core/render/canvas2d/basicRenderer/ImageRenderer";
@@ -74,6 +75,7 @@ import { TagManager } from "@/core/stage/stageManager/concreteMethods/StageTagMa
 import { HistoryManager } from "@/core/stage/stageManager/StageHistoryManager";
 import { StageManager } from "@/core/stage/stageManager/StageManager";
 import { AutoSaveBackupService } from "./service/dataFileService/AutoSaveBackupService";
+import { ServerProjectLockService } from "./service/dataFileService/ServerProjectLockService";
 import { ReferenceManager } from "./stage/stageManager/concreteMethods/StageReferenceManager";
 
 /**
@@ -83,6 +85,7 @@ import { ReferenceManager } from "./stage/stageManager/concreteMethods/StageRefe
 export function loadAllServicesBeforeInit(project: Project): void {
   project.registerFileSystemProvider("file", FileSystemProviderFile);
   project.registerFileSystemProvider("draft", FileSystemProviderDraft);
+  project.registerFileSystemProvider("server", FileSystemProviderServer);
   project.loadService(Canvas);
   project.loadService(InputElement);
   project.loadService(StageStyleManager);
@@ -178,4 +181,5 @@ export function loadAllServicesBeforeInit(project: Project): void {
 
 export function loadAllServicesAfterInit(project: Project): void {
   project.loadService(HistoryManager);
+  project.loadService(ServerProjectLockService);
 }
