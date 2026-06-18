@@ -11,6 +11,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { deserialize, serialize } from "@graphif/serializer";
+import mime from "mime";
 
 interface LiveSession {
   id: string;
@@ -85,11 +86,11 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
   const options = asRecord(params);
   const project = resolveProject(options);
   const archive = await projectToArchive(project);
-  const revision = getProjectRevision(project);
+  const revision = await getProjectRevision(project);
 
   if (method === "inspect") {
     return {
-      document: describeProject(project),
+      document: await describeProject(project),
       revision,
       pgjson: archiveToPgJson(archive),
     };
@@ -108,7 +109,7 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
       throw new Error(`Unsupported live export format: ${format}`);
     }
     return {
-      document: describeProject(project),
+      document: await describeProject(project),
       revision,
       format,
       content,
@@ -122,7 +123,7 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
     }
     const result = applyOperationsToArchive(archive, patch);
     applyArchiveToProject(project, result.archive);
-    const nextRevision = setProjectRevision(project, revision + 1);
+    const nextRevision = await setProjectRevision(project, revision + 1);
     const warnings = [...result.warnings];
     const saveResult = await saveProjectIfRequested(project, save, warnings);
     return {
@@ -131,7 +132,7 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
       saved: saveResult.saved,
       uri: saveResult.uri,
       state: ProjectState[project.projectState],
-      document: describeProject(project),
+      document: await describeProject(project),
       previousRevision: revision,
       revision: nextRevision,
     };
@@ -140,23 +141,25 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
   throw new Error(`Unsupported live method: ${method}`);
 }
 
-function listDocuments() {
+async function listDocuments() {
   const active = store.get(activeTabAtom);
-  return store.get(tabsAtom).map((tab, index) => ({
-    ...(tab instanceof Project
-      ? describeProject(tab, index, tab === active)
-      : {
-          id: `tab:${index}`,
-          index,
-          title: tab.title,
-          active: tab === active,
-          type: "tab" as const,
-          uri: null,
-          state: null,
-          dirty: null,
-          revision: null,
-        }),
-  }));
+  return Promise.all(
+    store.get(tabsAtom).map(async (tab, index) => ({
+      ...(tab instanceof Project
+        ? await describeProject(tab, index, tab === active)
+        : {
+            id: `tab:${index}`,
+            index,
+            title: tab.title,
+            active: tab === active,
+            type: "tab" as const,
+            uri: null,
+            state: null,
+            dirty: null,
+            revision: null,
+          }),
+    })),
+  );
 }
 
 async function projectToArchive(project: Project): Promise<CoreArchive> {
@@ -215,11 +218,11 @@ async function saveProjectIfRequested(
   return { saved: true, uri: project.uri.toString() };
 }
 
-function describeProject(
+async function describeProject(
   project: Project,
   index = getProjectIndex(project),
   active = store.get(activeTabAtom) === project,
-): LiveDocument {
+): Promise<LiveDocument> {
   return {
     id: getDocumentId(project),
     index,
@@ -229,7 +232,7 @@ function describeProject(
     uri: project.uri.toString(),
     state: ProjectState[project.projectState],
     dirty: project.projectState !== ProjectState.Saved,
-    revision: getProjectRevision(project),
+    revision: await getProjectRevision(project),
   };
 }
 
@@ -277,9 +280,9 @@ function getProjectIndex(project: Project): number {
   return store.get(tabsAtom).indexOf(project);
 }
 
-function getProjectRevision(project: Project): number {
+async function getProjectRevision(project: Project): Promise<number> {
   const id = getDocumentId(project);
-  const fingerprint = getProjectFingerprint(project);
+  const fingerprint = await getProjectFingerprint(project);
   const existing = documentRevisions.get(id);
   if (!existing) {
     documentRevisions.set(id, { fingerprint, revision: 0 });
@@ -292,25 +295,32 @@ function getProjectRevision(project: Project): number {
   return existing.revision;
 }
 
-function setProjectRevision(project: Project, revision: number): number {
+async function setProjectRevision(project: Project, revision: number): Promise<number> {
   documentRevisions.set(getDocumentId(project), {
-    fingerprint: getProjectFingerprint(project),
+    fingerprint: await getProjectFingerprint(project),
     revision,
   });
   return revision;
 }
 
-function getProjectFingerprint(project: Project): string {
+async function getProjectFingerprint(project: Project): Promise<string> {
   return JSON.stringify({
     stageHash: project.stageHash,
     tags: project.tags,
     references: project.references,
     metadata: project.metadata,
     readme: project.readme,
-    attachments: [...project.attachments.entries()]
-      .map(([id, blob]) => ({ id, type: blob.type, size: blob.size }))
-      .sort((a, b) => a.id.localeCompare(b.id)),
+    attachments: await Promise.all(
+      [...project.attachments.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(async ([id, blob]) => ({ id, type: blob.type, size: blob.size, sha256: await hashBlob(blob) })),
+    ),
   });
+}
+
+async function hashBlob(blob: Blob): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function normalizePatchRequest(params: unknown): { patch: ProjectGraphPatch; save: boolean } {
@@ -339,9 +349,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function extensionFromMime(mime: string): string {
-  if (mime === "image/png") return "png";
-  if (mime === "image/jpeg") return "jpg";
-  if (mime === "image/svg+xml") return "svg";
-  return "bin";
+function extensionFromMime(mimeType: string): string {
+  return mime.getExtension(mimeType) ?? "bin";
 }
