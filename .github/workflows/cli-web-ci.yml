@@ -1,0 +1,100 @@
+name: CLI and Web
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+      - "codex/**"
+  workflow_dispatch:
+
+jobs:
+  cli-web:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test PRG codec
+        run: pnpm --filter @graphif/prg-codec test
+
+      - name: Test graph core
+        run: pnpm --filter @graphif/project-graph-core test
+
+      - name: Test CLI
+        run: pnpm --filter @graphif/project-graph-cli test
+
+      - name: Type-check CLI
+        run: pnpm --filter @graphif/project-graph-cli type-check
+
+      - name: Test Web server API
+        run: pnpm --filter @graphif/project-graph-web-server test
+
+      - name: Build CLI
+        run: pnpm nx build @graphif/project-graph-cli
+
+      - name: Build Web frontend
+        run: pnpm run web:build
+
+      - name: Start Web server
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-web-data"
+          $LogPath = Join-Path $env:RUNNER_TEMP "project-graph-web.log"
+          $StartScript = Join-Path $PWD "scripts\start-web.ps1"
+          $Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`" -SkipBuild -NoAuth -Port 37820 -DataDir `"$DataDir`" -LogPath `"$LogPath`""
+          $Process = Start-Process -FilePath "powershell.exe" -ArgumentList $Arguments -WorkingDirectory $PWD -WindowStyle Hidden -PassThru
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP "project-graph-web.pid") -Value $Process.Id -Encoding UTF8
+
+          for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
+            Start-Sleep -Milliseconds 500
+            try {
+              $Health = Invoke-RestMethod -Uri "http://127.0.0.1:37820/api/health" -TimeoutSec 2
+              if ($Health.ok) {
+                exit 0
+              }
+            } catch {
+              if ($Process.HasExited) {
+                break
+              }
+            }
+          }
+
+          if (Test-Path $LogPath) {
+            Get-Content -LiteralPath $LogPath
+          }
+          throw "Project Graph Web did not become healthy."
+
+      - name: Smoke Web server
+        shell: powershell
+        run: |
+          $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-web-data"
+          .\scripts\smoke-web.ps1 -Port 37820 -DataDir $DataDir
+
+      - name: Stop Web server
+        if: always()
+        shell: powershell
+        run: |
+          .\scripts\stop-web.ps1 -PortStart 37820 -PortEnd 37820
+          $PidPath = Join-Path $env:RUNNER_TEMP "project-graph-web.pid"
+          if (Test-Path $PidPath) {
+            $ServerPid = [int](Get-Content -LiteralPath $PidPath)
+            Stop-Process -Id $ServerPid -Force -ErrorAction SilentlyContinue
+          }
