@@ -27,6 +27,7 @@
 
     "baseUrl": ".",
     "paths": {
+      "@graphif/project-graph-core": ["../packages/project-graph-core/src/index.ts"],
       "@/*": ["./src/*"]
     }
   },

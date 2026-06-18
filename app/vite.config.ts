@@ -62,6 +62,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@graphif/project-graph-core": path.resolve(__dirname, "../packages/project-graph-core/src/index.ts"),
     },
   },
 

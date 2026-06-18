@@ -4,10 +4,13 @@ mod ipc_bridge;
 mod cmd;
 
 use std::sync::{Mutex, OnceLock};
-use tauri::{Emitter, Manager, State, Listener};
+use tauri::{Manager, State};
 
 // 这两行可能不能去掉，否则会导致linux打包软件报错
+#[cfg(target_os = "linux")]
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use tauri::Listener;
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 #[derive(Default)]
@@ -66,6 +69,7 @@ pub fn run() {
     println!("Starting Tauri builder setup...");
     let builder = tauri::Builder::default()
         .manage(PendingOpenFiles::default())
+        .manage(cmd::live::LiveBridgeState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
@@ -123,8 +127,13 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             qt_ipc_response,
             take_pending_open_files,
+            cmd::live::project_graph_live_start,
+            cmd::live::project_graph_live_response,
+            #[cfg(feature = "paddle-ocr")]
             cmd::paddle::get_aha_directory,
+            #[cfg(feature = "paddle-ocr")]
             cmd::paddle::paddleocr_vl_1_6_model_exists,
+            #[cfg(feature = "paddle-ocr")]
             cmd::paddle::paddleocr_vl_1_6_generate,
             cmd::fs::read_folder_structure,
             cmd::fs::exists,
