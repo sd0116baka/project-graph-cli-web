@@ -34,6 +34,7 @@ import App from "./App";
 import { ExtensionManager } from "./core/extension/ExtensionManager";
 import { onOpenFile } from "./core/service/GlobalMenu";
 import { handleDeepLink, isProjectGraphDeepLink } from "./core/service/dataFileService/DeepLinkHandler";
+import { startLiveCommandService } from "./core/service/liveCommandService";
 import "./css/index.css";
 import Fallback from "./Fallback";
 
@@ -49,6 +50,8 @@ const el = document.getElementById("root")!;
 (async () => {
   const matches = !isWeb && isDesktop ? await getMatches() : null;
   const isCliMode = isDesktop && matches?.args.output?.occurrences === 1;
+  const isLiveMode = isDesktop && matches?.args.live?.occurrences === 1;
+  const livePort = Number(matches?.args["live-port"]?.value);
   await Promise.all([
     RecentFileManager.init(),
     StartFilesManager.init(),
@@ -62,6 +65,9 @@ const el = document.getElementById("root")!;
   await Promise.all([loadLanguageFiles(), loadSyncModules(), initAuth()]);
   await renderApp(isCliMode);
   await loadStartFile();
+  if (isLiveMode) {
+    await startLiveCommandService(Number.isFinite(livePort) && livePort > 0 ? livePort : undefined);
+  }
   if (isCliMode) {
     try {
       await runCli(matches);

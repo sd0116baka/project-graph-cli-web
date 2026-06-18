@@ -1,0 +1,36 @@
+{
+  "name": "@graphif/project-graph-core",
+  "description": "Headless Project Graph document transforms and operations",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "cd ../.. && vitest run packages/project-graph-core/tests/index.test.ts",
+    "type-check": "tsc",
+    "publish": "pnpm publish --no-git-checks"
+  },
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@graphif/prg-codec": "workspace:*"
+  }
+}

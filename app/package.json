@@ -28,6 +28,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@emoji-mart/data": "1.2.1",
     "@graphif/data-structures": "workspace:*",
+    "@graphif/project-graph-core": "workspace:*",
     "@graphif/serializer": "workspace:*",
     "@graphif/shapes": "workspace:*",
     "@headlessui/react": "^2.2.10",

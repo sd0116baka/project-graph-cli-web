@@ -101,6 +101,16 @@
           "short": "o",
           "takesValue": true,
           "multiple": false
+        },
+        {
+          "name": "live",
+          "takesValue": false,
+          "multiple": false
+        },
+        {
+          "name": "live-port",
+          "takesValue": true,
+          "multiple": false
         }
       ]
     },

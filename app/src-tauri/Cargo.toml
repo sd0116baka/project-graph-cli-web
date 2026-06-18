@@ -11,6 +11,10 @@ edition = "2021"
 name = "project_graph_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+default = ["paddle-ocr"]
+paddle-ocr = ["dep:aha"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.0", features = [] }
 
@@ -35,18 +39,19 @@ tauri-plugin-global-shortcut = "2.3.0"
 tauri-plugin-system-info = "2.0.9"
 tauri-plugin-deep-link = "2"
 regex = "1.12.3"
+rand = "0.9.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-aha = { version = "0.2.6", features = ["metal"] }
+aha = { version = "0.2.6", features = ["metal"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-aha = { version = "0.2.6", features = ["cuda"] }
+aha = { version = "0.2.6", features = ["cuda"], optional = true }
 cxx = "1.0.126"
 cxx-qt = "0.7"
 cxx-qt-lib = "0.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-aha = { version = "0.2.6" }
+aha = { version = "0.2.6", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-cli = "2"

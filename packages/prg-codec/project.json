@@ -1,0 +1,21 @@
+{
+  "name": "@graphif/prg-codec",
+  "targets": {
+    "build": {
+      "cache": true,
+      "outputs": ["{projectRoot}/dist/**"]
+    },
+    "type-check": {
+      "cache": true,
+      "inputs": ["{projectRoot}/src/**/*.ts", "{projectRoot}/tests/**/*.ts"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["{projectRoot}/src/**/*.ts", "{projectRoot}/tests/**/*.ts"]
+    },
+    "publish": {
+      "dependsOn": ["build"],
+      "cache": false
+    }
+  }
+}
