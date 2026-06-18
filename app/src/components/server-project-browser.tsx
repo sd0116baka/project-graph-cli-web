@@ -49,8 +49,33 @@ export function ServerProjectBrowser() {
     const onServerError = (event: Event) => {
       setLastFailure((event as CustomEvent<ServerProjectManager.ServerProjectErrorDetail>).detail);
     };
+    let eventSubscription: (() => void) | undefined;
+    let disposed = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleEventRefresh = () => {
+      if (refreshTimer) globalThis.clearTimeout(refreshTimer);
+      refreshTimer = globalThis.setTimeout(() => void refreshProjects(), 250);
+    };
+    void ServerProjectManager.subscribeBackendEvents((event) => {
+      if (shouldRefreshForBackendEvent(event)) {
+        scheduleEventRefresh();
+      }
+    })
+      .then((dispose) => {
+        if (disposed) {
+          dispose();
+        } else {
+          eventSubscription = dispose;
+        }
+      })
+      .catch((error) => {
+        reportFailure(error, "订阅后端事件失败");
+      });
     window.addEventListener(ServerProjectManager.errorEventName, onServerError);
     return () => {
+      disposed = true;
+      eventSubscription?.();
+      if (refreshTimer) globalThis.clearTimeout(refreshTimer);
       window.removeEventListener(ServerProjectManager.errorEventName, onServerError);
     };
   }, []);
@@ -489,4 +514,16 @@ function formatBytes(size: number): string {
     unitIndex++;
   }
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function shouldRefreshForBackendEvent(event: ServerProjectManager.BackendEvent): boolean {
+  return (
+    event.type === "project_created" ||
+    event.type === "project_imported" ||
+    event.type === "project_renamed" ||
+    event.type === "project_deleted" ||
+    event.type === "project_updated" ||
+    event.type === "history_changed" ||
+    event.type === "lock_changed"
+  );
 }

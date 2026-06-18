@@ -62,6 +62,17 @@ export namespace ServerProjectManager {
     source?: string;
   };
 
+  export type BackendEvent = {
+    id: string;
+    type: string;
+    createdAt: string;
+    projectId?: string;
+    revisionToken?: string;
+    reason?: string;
+    lock?: ProjectLock | null;
+    [key: string]: unknown;
+  };
+
   export type BackendStartOptions = {
     port?: number;
     dataDir?: string;
@@ -242,6 +253,37 @@ export namespace ServerProjectManager {
 
   export function backendTargetUrl(target: BackendTarget): string {
     return target.localUrl || target.url || target.lanUrl || "";
+  }
+
+  export async function subscribeBackendEvents(onEvent: (event: BackendEvent) => void): Promise<() => void> {
+    if (typeof EventSource === "undefined") {
+      return () => undefined;
+    }
+    await ensureBackendConnection();
+    const source = new EventSource(apiUrl("/api/events"), { withCredentials: true });
+    const eventNames = [
+      "server_connected",
+      "project_created",
+      "project_imported",
+      "project_renamed",
+      "project_deleted",
+      "project_updated",
+      "history_changed",
+      "lock_changed",
+    ];
+    const listeners = eventNames.map((eventName) => {
+      const listener = (event: MessageEvent<string>) => {
+        onEvent(JSON.parse(event.data) as BackendEvent);
+      };
+      source.addEventListener(eventName, listener);
+      return { eventName, listener };
+    });
+    return () => {
+      for (const { eventName, listener } of listeners) {
+        source.removeEventListener(eventName, listener);
+      }
+      source.close();
+    };
   }
 
   export async function createProject(name: string): Promise<ServerProject> {

@@ -65,6 +65,8 @@ interface ParsedArgs {
   daemonSkipBuild: boolean;
   daemonNoAuth: boolean;
   etag?: string;
+  waitTimeoutMs?: number;
+  waitLockFree: boolean;
   queryKind?: string;
   queryText?: string;
   queryId?: string;
@@ -94,6 +96,7 @@ Usage:
   project-graph server export <project-id> --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph server validate <project-id> [--url <url>] [--user <user> --password <password>] [--json]
   project-graph server import <input.pg.json|input.md|input.mmd> [--format pgjson|markdown|mermaid] [--name <project-name>] [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph server wait [ready|<project-id>] [--revision <token>] [--lock-free] [--timeout <ms>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph target list [--url <url>] [--json]
   project-graph daemon start [--port <n>] [--data-dir <path>] [--user <user> --password <password>] [--no-auth] [--skip-build] [--json]
   project-graph daemon stop [--port <n>] [--json]
@@ -299,6 +302,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let daemonSkipBuild = false;
   let daemonNoAuth = false;
   let etag: string | undefined;
+  let waitTimeoutMs: number | undefined;
+  let waitLockFree = false;
   let queryKind: string | undefined;
   let queryText: string | undefined;
   let queryId: string | undefined;
@@ -350,8 +355,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       daemonSkipBuild = true;
     } else if (arg === "--no-auth") {
       daemonNoAuth = true;
-    } else if (arg === "--etag" || arg === "--if-match") {
+    } else if (arg === "--etag" || arg === "--if-match" || arg === "--revision") {
       etag = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--timeout") {
+      waitTimeoutMs = Number(requireFlagValue(argv, ++index, arg));
+    } else if (arg === "--lock-free") {
+      waitLockFree = true;
     } else if (arg === "--kind" || arg === "--type") {
       queryKind = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--text") {
@@ -393,6 +402,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       daemonSkipBuild,
       daemonNoAuth,
       etag,
+      waitTimeoutMs,
+      waitLockFree,
       queryKind,
       queryText,
       queryId,
@@ -441,6 +452,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     daemonSkipBuild,
     daemonNoAuth,
     etag,
+    waitTimeoutMs,
+    waitLockFree,
     queryKind,
     queryText,
     queryId,
@@ -853,7 +866,105 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
+  if (subcommand === "wait") {
+    const target = args.positionals[1] ?? "ready";
+    if (target === "ready") {
+      const result = await waitForServerReady(args);
+      if (args.json) {
+        printJson(result);
+      } else {
+        console.log(`ready: ${result.url}`);
+      }
+    } else {
+      const result = await waitForServerProject(args, target);
+      if (args.json) {
+        printJson(result);
+      } else {
+        console.log(`ready: ${target}`);
+        if (result.revisionToken) {
+          console.log(`revisionToken: ${result.revisionToken}`);
+        }
+      }
+    }
+    return 0;
+  }
+
   throw new Error(`Unknown server subcommand: ${subcommand}`);
+}
+
+async function waitForServerReady(args: ParsedArgs): Promise<{ ok: true; url: string; elapsedMs: number }> {
+  const startedAt = Date.now();
+  const deadline = startedAt + waitTimeout(args);
+  while (Date.now() < deadline) {
+    if (await testBackendHealth(serverBaseUrl(args))) {
+      return { ok: true, url: serverBaseUrl(args), elapsedMs: Date.now() - startedAt };
+    }
+    await sleep(500);
+  }
+  throw new ProjectGraphServerError(0, "server_wait_timeout", "Project Graph backend did not become ready.", {
+    url: serverBaseUrl(args),
+    timeoutMs: waitTimeout(args),
+  });
+}
+
+async function waitForServerProject(
+  args: ParsedArgs,
+  projectId: string,
+): Promise<{ ok: true; projectId: string; revisionToken?: string; lockFree?: boolean; elapsedMs: number }> {
+  const startedAt = Date.now();
+  const deadline = startedAt + waitTimeout(args);
+  while (Date.now() < deadline) {
+    let revisionToken: string | undefined;
+    try {
+      const report = await sendServerJsonRequest<{ etag?: string; revisionToken?: string }>(
+        "GET",
+        `/api/projects/${encodeURIComponent(projectId)}/validate`,
+        args,
+      );
+      revisionToken = report.revisionToken ?? report.etag;
+    } catch (error) {
+      if (!(error instanceof ProjectGraphServerError) || error.status !== 404) {
+        throw error;
+      }
+    }
+    const revisionReady = !args.etag || (revisionToken !== undefined && revisionToken !== args.etag);
+    const lockFree = !args.waitLockFree || (await isServerProjectLockFree(args, projectId));
+    if (revisionReady && lockFree && revisionToken !== undefined) {
+      return {
+        ok: true,
+        projectId,
+        revisionToken,
+        lockFree,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    await sleep(500);
+  }
+  throw new ProjectGraphServerError(
+    0,
+    "server_wait_timeout",
+    "Project Graph project did not reach the wait condition.",
+    {
+      projectId,
+      revisionToken: args.etag,
+      lockFree: args.waitLockFree,
+      timeoutMs: waitTimeout(args),
+    },
+  );
+}
+
+async function isServerProjectLockFree(args: ParsedArgs, projectId: string): Promise<boolean> {
+  const response = await sendServerJsonRequest<{ projects: ServerProject[] }>("GET", "/api/projects", args);
+  const project = response.projects.find((item) => item.id === projectId);
+  return Boolean(project && !project.lock);
+}
+
+function waitTimeout(args: ParsedArgs): number {
+  const timeout = args.waitTimeoutMs ?? 60_000;
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    throw new Error("--timeout must be a positive number of milliseconds.");
+  }
+  return timeout;
 }
 
 async function handleTargetCommand(args: ParsedArgs): Promise<number> {
@@ -1136,6 +1247,7 @@ function emptyParsedArgs(): ParsedArgs {
     includeUnsupported: false,
     daemonSkipBuild: false,
     daemonNoAuth: false,
+    waitLockFree: false,
   };
 }
 

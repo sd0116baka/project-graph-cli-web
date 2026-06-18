@@ -133,7 +133,7 @@ function Write-WebBackendRegistryTarget {
       history = $true
       restore = $true
       locks = $true
-      events = $false
+      events = $true
     }
   }
   @{ targets = @($Existing + $Target) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $RegistryPath -Encoding UTF8

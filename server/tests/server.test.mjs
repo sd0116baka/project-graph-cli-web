@@ -40,7 +40,7 @@ describe("@graphif/project-graph-web-server", () => {
       port: server.port,
       authEnabled: false,
       customDataDir: true,
-      capabilities: { import: true, validate: true },
+      capabilities: { import: true, validate: true, events: true },
     });
     expect(info.body.dataDirName).toContain("project-graph-web-server-test-");
 
@@ -109,6 +109,33 @@ describe("@graphif/project-graph-web-server", () => {
     });
     expect(patch.response.status).toBe(200);
     expect(patch.body).toMatchObject({ ok: true, revisionToken: expect.any(String), changed: ["Review"] });
+  });
+
+  it("publishes project change events over SSE", async () => {
+    const server = await startServer();
+    const abort = new AbortController();
+    const events = await fetch(urlFor(server, "/api/events"), {
+      headers: { "X-Project-Graph-Client": "server-test" },
+      signal: abort.signal,
+    });
+    const nextProjectEvent = readSseEvent(events, "project_imported");
+
+    const imported = await requestJson(server, "/api/projects/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Event Runtime", format: "markdown", content: "# Intake\n" }),
+    });
+    const event = await nextProjectEvent;
+    abort.abort();
+
+    expect(events.status).toBe(200);
+    expect(events.headers.get("content-type")).toContain("text/event-stream");
+    expect(imported.response.status).toBe(201);
+    expect(event).toMatchObject({
+      type: "project_imported",
+      projectId: imported.body.project.id,
+      revisionToken: imported.body.project.revisionToken,
+    });
   });
 
   it("returns validation reports for corrupt project blobs", async () => {
@@ -285,6 +312,42 @@ async function requestJson(server, path, init) {
     response,
     body: text ? JSON.parse(text) : {},
   };
+}
+
+async function readSseEvent(response, expectedType) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const read = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for SSE data")), remaining)),
+    ]);
+    if (read.done) break;
+    buffer += decoder.decode(read.value, { stream: true });
+    let separator = buffer.indexOf("\n\n");
+    while (separator !== -1) {
+      const rawEvent = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const event = parseSseEvent(rawEvent);
+      if (event?.type === expectedType) {
+        return event;
+      }
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+  throw new Error(`Timed out waiting for ${expectedType} SSE event.`);
+}
+
+function parseSseEvent(rawEvent) {
+  const lines = rawEvent.split("\n");
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n");
+  return data ? JSON.parse(data) : undefined;
 }
 
 function urlFor(server, path) {

@@ -609,6 +609,46 @@ describe("@graphif/project-graph-cli", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ revisionToken: '"etag-b"', changed: ["node-a"] });
   });
 
+  it("waits for a Web backend and project revision", async () => {
+    let validateCount = 0;
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/health") {
+        return { body: { ok: true } };
+      }
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/validate") {
+        validateCount++;
+        const revisionToken = validateCount === 1 ? '"etag-a"' : '"etag-b"';
+        return { body: { ok: true, etag: revisionToken, revisionToken, issues: [] } };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+
+    const readyResult = await runCli(["server", "wait", "ready", "--url", url, "--timeout", "1000", "--json"]);
+    const revisionResult = await runCli([
+      "server",
+      "wait",
+      "project-a",
+      "--url",
+      url,
+      "--revision",
+      '"etag-a"',
+      "--timeout",
+      "3000",
+      "--json",
+    ]);
+
+    expect(readyResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(readyResult.stdout)).toMatchObject({ ok: true, url });
+    expect(revisionResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(revisionResult.stdout)).toMatchObject({
+      ok: true,
+      projectId: "project-a",
+      revisionToken: '"etag-b"',
+    });
+  });
+
   it("discovers backend targets from the local registry", async () => {
     const dir = await createTempDir();
     const registryPath = join(dir, "project-graph-backends.json");

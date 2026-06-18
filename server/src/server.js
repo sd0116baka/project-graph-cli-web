@@ -29,6 +29,8 @@ const host = process.env.HOST ?? process.env.PG_WEB_HOST ?? "0.0.0.0";
 const authUser = process.env.PG_WEB_AUTH_USER ?? "pg";
 const authPassword = process.env.PG_WEB_AUTH_PASSWORD ?? "";
 const projectMutationQueues = new Map();
+const eventClients = new Set();
+let eventSeq = 0;
 const apiVersion = "0.1";
 
 await ensureLayout();
@@ -122,9 +124,14 @@ async function handleApi(req, res, requestUrl) {
         history: true,
         restore: true,
         locks: true,
-        events: false,
+        events: true,
       },
     });
+    return;
+  }
+
+  if (req.method === "GET" && requestUrl.pathname === "/api/events") {
+    sendEventStream(req, res);
     return;
   }
 
@@ -137,6 +144,7 @@ async function handleApi(req, res, requestUrl) {
     if (req.method === "POST") {
       const body = await readJson(req);
       const project = await createProject(body?.name);
+      publishEvent("project_created", { projectId: project.id, project });
       sendJson(res, 201, { project });
       return;
     }
@@ -145,6 +153,11 @@ async function handleApi(req, res, requestUrl) {
   if (segments.length === 3 && segments[1] === "projects" && segments[2] === "import" && req.method === "POST") {
     const body = await readJson(req);
     const project = await importProject(body);
+    publishEvent("project_imported", {
+      projectId: project.id,
+      project,
+      revisionToken: project.revisionToken,
+    });
     sendJson(res, 201, { ok: true, project });
     return;
   }
@@ -160,6 +173,7 @@ async function handleApi(req, res, requestUrl) {
       }
       const body = await readJson(req);
       const project = await renameProject(id, body?.name);
+      publishEvent("project_renamed", { projectId: id, project });
       sendJson(res, 200, { project });
       return;
     }
@@ -172,6 +186,7 @@ async function handleApi(req, res, requestUrl) {
         }
         await removeProject(id);
       });
+      publishEvent("project_deleted", { projectId: id });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -193,6 +208,8 @@ async function handleApi(req, res, requestUrl) {
           return writeProjectBlob(id, content, { expectedEtag: ifMatch });
         });
         res.setHeader("ETag", etag);
+        publishEvent("project_updated", { projectId: id, reason: "blob", revisionToken: etag });
+        publishEvent("history_changed", { projectId: id });
         sendJson(res, 200, { ok: true, etag, revisionToken: etag });
         return;
       }
@@ -201,12 +218,14 @@ async function handleApi(req, res, requestUrl) {
     if (segments.length === 4 && segments[3] === "lock" && req.method === "POST") {
       const body = await readJson(req);
       const lock = await lockProject(id, body?.clientId ?? clientId, body?.ttlSeconds, body?.clientName ?? clientId);
+      publishEvent("lock_changed", { projectId: id, lock });
       sendJson(res, 200, { lock });
       return;
     }
 
     if (segments.length === 4 && segments[3] === "unlock" && req.method === "POST") {
       await unlockProject(id, clientId);
+      publishEvent("lock_changed", { projectId: id, lock: null });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -316,6 +335,8 @@ async function handleApi(req, res, requestUrl) {
       });
       const { etag, changed, warnings } = response;
       res.setHeader("ETag", etag);
+      publishEvent("project_updated", { projectId: id, reason: "patch", revisionToken: etag, changed });
+      publishEvent("history_changed", { projectId: id });
       sendJson(res, 200, { ok: true, etag, revisionToken: etag, changed, warnings });
       return;
     }
@@ -330,6 +351,8 @@ async function handleApi(req, res, requestUrl) {
         return restoreProjectRevision(id, revision);
       });
       res.setHeader("ETag", etag);
+      publishEvent("project_updated", { projectId: id, reason: "restore", revisionToken: etag });
+      publishEvent("history_changed", { projectId: id });
       sendJson(res, 200, { ok: true, etag, revisionToken: etag });
       return;
     }
@@ -666,6 +689,50 @@ async function serveStatic(res, pathname) {
   res.setHeader("Content-Length", String(stat.size));
   res.writeHead(200);
   createReadStream(filePath).pipe(res);
+}
+
+function sendEventStream(req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  eventClients.add(res);
+  writeSseEvent(res, "server_connected", {
+    id: String(++eventSeq),
+    type: "server_connected",
+    createdAt: new Date().toISOString(),
+    apiVersion,
+    port,
+    host,
+  });
+  const heartbeat = setInterval(() => {
+    res.write(`: ${new Date().toISOString()}\n\n`);
+  }, 30000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    eventClients.delete(res);
+  });
+}
+
+function publishEvent(type, payload = {}) {
+  if (eventClients.size === 0) return;
+  const event = {
+    id: String(++eventSeq),
+    type,
+    createdAt: new Date().toISOString(),
+    ...payload,
+  };
+  for (const client of eventClients) {
+    writeSseEvent(client, type, event);
+  }
+}
+
+function writeSseEvent(res, type, event) {
+  res.write(`id: ${event.id}\n`);
+  res.write(`event: ${type}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 async function readJson(req) {
