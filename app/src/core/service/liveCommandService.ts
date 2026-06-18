@@ -1,4 +1,6 @@
+import { loadAllServicesAfterInit, loadAllServicesBeforeInit } from "@/core/loadAllServices";
 import { Project, ProjectState } from "@/core/Project";
+import { TabFactory } from "@/core/TabFactory";
 import { activeTabAtom, store, tabsAtom } from "@/state";
 import {
   applyOperationsToArchive,
@@ -12,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { deserialize, serialize } from "@graphif/serializer";
 import mime from "mime";
+import { URI } from "vscode-uri";
 
 interface LiveSession {
   id: string;
@@ -81,6 +84,10 @@ export async function startLiveCommandService(port?: number): Promise<LiveSessio
 async function handleLiveRequest(method: string, params: unknown): Promise<unknown> {
   if (method === "list_documents") {
     return listDocuments();
+  }
+
+  if (method === "open_document") {
+    return openDocument(asRecord(params));
   }
 
   const options = asRecord(params);
@@ -160,6 +167,73 @@ async function listDocuments() {
           }),
     })),
   );
+}
+
+async function openDocument(params: Record<string, unknown>) {
+  const rawUri = typeof params.uri === "string" ? params.uri : undefined;
+  if (!rawUri) {
+    throw new Error("Live open_document params must include a uri string.");
+  }
+
+  const uri = URI.parse(rawUri);
+  if (uri.scheme !== "file") {
+    throw new Error(`Live open_document currently supports file URIs only: ${uri.toString()}`);
+  }
+  if (!uri.path.toLowerCase().endsWith(".prg")) {
+    throw new Error(`Live open_document only supports .prg files: ${uri.toString()}`);
+  }
+
+  const existing = store
+    .get(tabsAtom)
+    .find((tab): tab is Project => tab instanceof Project && getDocumentId(tab) === uri.toString());
+  if (existing) {
+    activateProject(existing);
+    return {
+      opened: false,
+      alreadyOpen: true,
+      document: await describeProject(existing),
+    };
+  }
+
+  const project = await loadProjectFromUri(uri);
+  store.set(tabsAtom, [...store.get(tabsAtom), project]);
+  activateProject(project);
+
+  return {
+    opened: true,
+    alreadyOpen: false,
+    document: await describeProject(project),
+  };
+}
+
+async function loadProjectFromUri(uri: URI): Promise<Project> {
+  const dummyProject = new Project(uri);
+  loadAllServicesBeforeInit(dummyProject);
+  const tab = await TabFactory.create(uri, dummyProject.fs);
+  await dummyProject.dispose();
+
+  if (!(tab instanceof Project)) {
+    await tab.dispose();
+    throw new Error(`Live open_document only supports Project Graph documents: ${uri.toString()}`);
+  }
+
+  loadAllServicesBeforeInit(tab);
+  await tab.init();
+  if (tab.projectState !== ProjectState.Saved) {
+    await tab.dispose();
+    throw new Error(`Live open_document failed to open document: ${uri.toString()}`);
+  }
+  loadAllServicesAfterInit(tab);
+  return tab;
+}
+
+function activateProject(project: Project): void {
+  store.set(activeTabAtom, project);
+  project.loop();
+  store
+    .get(tabsAtom)
+    .filter((tab): tab is Project => tab instanceof Project && tab !== project)
+    .forEach((tab) => tab.pause());
 }
 
 async function projectToArchive(project: Project): Promise<CoreArchive> {
