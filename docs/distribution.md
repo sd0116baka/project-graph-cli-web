@@ -38,6 +38,14 @@ The installer direction is to bundle the portable backend runtime as a Tauri res
 
 For this fork, the portable zip remains the preview distribution until a clean Windows Desktop installer smoke validates the resource layout and the Node runtime policy.
 
+Build the preview Desktop installer:
+
+```powershell
+pnpm run package:desktop-preview
+```
+
+Use `.\scripts\build-desktop-installer.ps1 -SkipPortableBuild` only when the portable runtime was built immediately before the installer step.
+
 ## Upgrade And Data
 
 Default backend data lives under `server\data` inside the runtime root. Production use should pass an explicit data directory:

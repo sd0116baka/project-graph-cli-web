@@ -16,6 +16,8 @@ $RequiredPaths = @(
   "docs\security.md",
   "README-cli.md",
   "README-web.md",
+  "app\src-tauri\tauri.cli-web.conf.json",
+  "scripts\build-desktop-installer.ps1",
   "scripts\package-portable.ps1",
   "scripts\smoke-web.ps1",
   "scripts\smoke-lan-auth.ps1",

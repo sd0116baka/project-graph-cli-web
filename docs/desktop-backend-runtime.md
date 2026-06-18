@@ -31,7 +31,15 @@ Tauri v2 supports `bundle.resources`. For an installer build, stage the portable
 }
 ```
 
-The mapping should be enabled only for release installer jobs after `scripts/package-portable.ps1` has staged `dist/portable/project-graph-cli-web`. It should not be required for normal app development builds.
+This fork keeps that mapping in `app/src-tauri/tauri.cli-web.conf.json`. It is enabled by the preview installer build script after `scripts/package-portable.ps1` has staged `dist/portable/project-graph-cli-web`; it is not required for normal app development builds.
+
+Build the preview installer:
+
+```powershell
+.\scripts\build-desktop-installer.ps1
+```
+
+By default the script rebuilds the portable runtime first, then passes `--no-default-features` to Cargo so the installer smoke can validate packaging without OCR native dependencies. Pass `-SkipPortableBuild` only when the portable runtime was built immediately before the installer step. Pass `-WithDefaultFeatures` when validating the full Desktop feature set.
 
 ## Desktop Startup
 
@@ -70,8 +78,7 @@ Bundling Node gives the most predictable user experience. Keeping Node external 
 Before a stable release, validate:
 
 ```powershell
-pnpm run package:portable
-pnpm tauri build
+pnpm run package:desktop-preview
 ```
 
 Then install the Desktop package on a clean Windows machine and verify:

@@ -10,10 +10,24 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 Set-Location $Root
 
+function Invoke-NativeCommand {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [Parameter(Mandatory = $true)]
+    [string[]]$Arguments
+  )
+
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$FilePath exited with code $LASTEXITCODE."
+  }
+}
+
 if (-not $SkipBuild) {
-  pnpm nx build @graphif/project-graph-core
-  pnpm nx build @graphif/project-graph-cli
-  pnpm run web:build
+  Invoke-NativeCommand -FilePath "pnpm" -Arguments @("nx", "build", "@graphif/project-graph-core")
+  Invoke-NativeCommand -FilePath "pnpm" -Arguments @("nx", "build", "@graphif/project-graph-cli")
+  Invoke-NativeCommand -FilePath "pnpm" -Arguments @("run", "web:build")
 }
 
 if (-not $Version) {

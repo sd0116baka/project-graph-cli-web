@@ -28,6 +28,7 @@
     "web:smoke:lan-auth": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-lan-auth.ps1",
     "web:smoke:rollback": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-upgrade-rollback.ps1",
     "package:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1",
+    "package:desktop-preview": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop-installer.ps1",
     "release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-readiness.ps1",
     "live:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-live-cli.ps1",
     "web:startup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-startup.ps1",
