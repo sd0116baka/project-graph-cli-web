@@ -31,6 +31,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build headless graph packages
+        run: pnpm nx build @graphif/project-graph-core
+
       - name: Test PRG codec
         run: pnpm --filter @graphif/prg-codec test
 

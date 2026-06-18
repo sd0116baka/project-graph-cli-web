@@ -54,6 +54,7 @@ node .\packages\project-graph-cli\dist\index.mjs server list --json
 Core checks for this fork:
 
 ```powershell
+pnpm nx build @graphif/project-graph-core
 pnpm --filter @graphif/prg-codec test
 pnpm --filter @graphif/project-graph-core test
 pnpm --filter @graphif/project-graph-cli test
