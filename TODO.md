@@ -27,11 +27,11 @@ Fork: `sd0116baka/project-graph-cli-web`
 
 ## Phase 3 - Tests And Safety Boundaries
 
-- [ ] `P3-1` Add Web server API integration tests with a temporary data directory.
-- [ ] `P3-2` Cover query, patch, and export happy paths.
-- [ ] `P3-3` Cover unauthenticated access, bad credentials, lock conflicts, and ETag conflicts.
-- [ ] `P3-4` Cover invalid patch payload rejection and backup creation before writes.
-- [ ] `P3-5` Add CLI server command smoke coverage against a temporary local server.
+- [x] `P3-1` Add Web server API integration tests with a temporary data directory.
+- [x] `P3-2` Cover query, patch, and export happy paths.
+- [x] `P3-3` Cover unauthenticated access, bad credentials, lock conflicts, and ETag conflicts.
+- [x] `P3-4` Cover invalid patch payload rejection and backup creation before writes.
+- [x] `P3-5` Add CLI server command smoke coverage against a temporary local server.
 
 ## Phase 4 - Web User Experience
 

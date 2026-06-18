@@ -70,6 +70,20 @@ if ($null -eq $ProjectsBefore.projects) {
 }
 Write-Host "OK: project list"
 
+$TempDir = Join-Path ([IO.Path]::GetTempPath()) ("project-graph-web-smoke-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+$CliPath = Join-Path $Root "packages\project-graph-cli\dist\index.mjs"
+if (-not (Test-Path $CliPath)) {
+  throw "Missing CLI build output: $CliPath. Run pnpm nx run @graphif/project-graph-cli:build first."
+}
+$MarkdownPath = Join-Path $TempDir "outline.md"
+$PrgPath = Join-Path $TempDir "outline.prg"
+Set-Content -LiteralPath $MarkdownPath -Encoding UTF8 -Value "# Intake`n`n## Review`n"
+& node $CliPath import $MarkdownPath --format markdown -o $PrgPath
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to create smoke .prg document"
+}
+
 $Project = Invoke-RestMethod `
   -Uri "$Base/api/projects" `
   -Method Post `
@@ -78,6 +92,7 @@ $Project = Invoke-RestMethod `
   -Body (@{ name = "Smoke Web Probe" } | ConvertTo-Json -Compress)
 
 $ProjectId = $Project.project.id
+$ProjectDeleted = $false
 
 try {
   $Renamed = Invoke-RestMethod `
@@ -92,12 +107,120 @@ try {
   }
   Write-Host "OK: rename"
 
+  $BlobBytes = [IO.File]::ReadAllBytes($PrgPath)
+  $BlobResponse = Invoke-WebRequest `
+    -Uri "$Base/api/projects/$ProjectId/blob" `
+    -Method Put `
+    -Headers $Headers `
+    -ContentType "application/vnd.project-graph" `
+    -Body $BlobBytes `
+    -UseBasicParsing
+  $OriginalEtag = [string](($BlobResponse.Headers.ETag | Select-Object -First 1))
+  if (-not $OriginalEtag) {
+    throw "Project blob write did not return an ETag"
+  }
+  Write-Host "OK: blob write"
+
+  $ReviewQuery = Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId/query?kind=node&text=Review" -Headers $Headers
+  if ($ReviewQuery.result.total -ne 1) {
+    throw "Graph query smoke failed"
+  }
+  Write-Host "OK: graph query"
+
+  $PatchHeaders = @{}
+  foreach ($Key in $Headers.Keys) {
+    $PatchHeaders[$Key] = $Headers[$Key]
+  }
+  $PatchHeaders["If-Match"] = $OriginalEtag
+  $PatchBody = '[{"op":"add_text_node","id":"ship","text":"Ship","position":{"x":520,"y":0}},{"op":"connect","id":"review-ship","source":"Review","target":"ship","text":"ready"}]'
+  $Patch = Invoke-RestMethod `
+    -Uri "$Base/api/projects/$ProjectId/patch" `
+    -Method Post `
+    -Headers $PatchHeaders `
+    -ContentType "application/json" `
+    -Body $PatchBody
+  if ($Patch.changed -notcontains "ship") {
+    throw "Graph patch smoke failed"
+  }
+  Write-Host "OK: graph patch"
+
+  $ShipQuery = Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId/query?kind=node&text=Ship" -Headers $Headers
+  if ($ShipQuery.result.total -ne 1) {
+    throw "Graph query after patch smoke failed"
+  }
+  Write-Host "OK: graph query after patch"
+
+  $History = Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId/history" -Headers $Headers
+  if ($History.history.Count -lt 1) {
+    throw "Graph patch did not create a backup revision"
+  }
+  Write-Host "OK: graph patch backup"
+
+  $MermaidExport = Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId/export?format=mermaid" -Headers $Headers
+  if ($MermaidExport.content -notmatch "ready") {
+    throw "Graph export smoke failed"
+  }
+  Write-Host "OK: graph export"
+
+  Expect-Status {
+    Invoke-RestMethod `
+      -Uri "$Base/api/projects/$ProjectId/patch" `
+      -Method Post `
+      -Headers $Headers `
+      -ContentType "application/json" `
+      -Body '[{"op":"add_text_node","text":42}]'
+  } 400 "invalid graph patch"
+
+  $OtherHeaders = @{}
+  foreach ($Key in $Headers.Keys) {
+    $OtherHeaders[$Key] = $Headers[$Key]
+  }
+  $OtherHeaders["X-Project-Graph-Client"] = "smoke-web-other-client"
+  Invoke-RestMethod `
+    -Uri "$Base/api/projects/$ProjectId/lock" `
+    -Method Post `
+    -Headers $OtherHeaders `
+    -ContentType "application/json" `
+    -Body (@{ ttlSeconds = 60; clientName = "Smoke Other Client" } | ConvertTo-Json -Compress) | Out-Null
+  Expect-Status {
+    Invoke-RestMethod `
+      -Uri "$Base/api/projects/$ProjectId/patch" `
+      -Method Post `
+      -Headers $Headers `
+      -ContentType "application/json" `
+      -Body '[{"op":"rename_node","id":"ship","text":"Locked Ship"}]'
+  } 423 "locked graph patch"
+  Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId/unlock" -Method Post -Headers $OtherHeaders | Out-Null
+
+  $StaleHeaders = @{}
+  foreach ($Key in $Headers.Keys) {
+    $StaleHeaders[$Key] = $Headers[$Key]
+  }
+  $StaleHeaders["If-Match"] = $OriginalEtag
+  Expect-Status {
+    Invoke-RestMethod `
+      -Uri "$Base/api/projects/$ProjectId/patch" `
+      -Method Post `
+      -Headers $StaleHeaders `
+      -ContentType "application/json" `
+      -Body '[{"op":"rename_node","id":"ship","text":"Stale Ship"}]'
+  } 412 "stale graph patch"
+
   Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId" -Method Delete -Headers $Headers | Out-Null
+  $ProjectDeleted = $true
   Write-Host "OK: delete"
 } finally {
+  if (-not $ProjectDeleted) {
+    try {
+      Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId" -Method Delete -Headers $Headers | Out-Null
+    } catch {
+      Write-Warning "Cleanup project delete failed: $($_.Exception.Message)"
+    }
+  }
   try {
-    Invoke-RestMethod -Uri "$Base/api/projects/$ProjectId" -Method Delete -Headers $Headers | Out-Null
+    Remove-Item -LiteralPath $TempDir -Recurse -Force
   } catch {
+    Write-Warning "Cleanup temp dir failed: $($_.Exception.Message)"
   }
 }
 
