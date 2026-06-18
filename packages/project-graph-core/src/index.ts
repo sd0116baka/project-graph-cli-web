@@ -1,5 +1,7 @@
 import type { PrgArchive, PrgAttachment, PrgMetadata, PrgReferences } from "@graphif/prg-codec";
 
+export * from "./opsSchema";
+
 export const PGJSON_SCHEMA_VERSION = "0.1" as const;
 
 export interface PgJsonColor {
@@ -91,7 +93,15 @@ export type ProjectGraphOperation =
   | { op: "set_node_details_markdown"; id: string; markdown: string }
   | { op: "move_node"; id: string; position: PgJsonPoint }
   | { op: "resize_node"; id: string; size: PgJsonSize }
-  | { op: "connect"; id?: string; source: string; target: string; text?: string; lineType?: string; color?: PgJsonColor }
+  | {
+      op: "connect";
+      id?: string;
+      source: string;
+      target: string;
+      text?: string;
+      lineType?: string;
+      color?: PgJsonColor;
+    }
   | { op: "set_edge_text"; id: string; text: string }
   | { op: "delete_object"; id: string }
   | { op: "set_color"; id: string; color: PgJsonColor }
@@ -258,10 +268,12 @@ export function pgJsonToArchive(document: PgJsonDocument, baseArchive?: PrgArchi
   };
 
   for (const node of document.nodes) {
-    addObject(createTextNode(node.id, node.text, node.x, node.y, node.width, node.height, {
-      color: node.color,
-      detailsMarkdown: node.detailsMarkdown,
-    }));
+    addObject(
+      createTextNode(node.id, node.text, node.x, node.y, node.width, node.height, {
+        color: node.color,
+        detailsMarkdown: node.detailsMarkdown,
+      }),
+    );
   }
 
   for (const section of document.sections) {
@@ -438,7 +450,10 @@ export function exportMermaid(archive: PrgArchive): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function importMarkdown(markdown: string, options: { origin?: PgJsonPoint; prgVersion?: string } = {}): PrgArchive {
+export function importMarkdown(
+  markdown: string,
+  options: { origin?: PgJsonPoint; prgVersion?: string } = {},
+): PrgArchive {
   const parsed = parseMarkdown(markdown);
   const document = createEmptyPgJson(options.prgVersion);
   let yIndex = 0;
@@ -484,7 +499,10 @@ export function importMarkdown(markdown: string, options: { origin?: PgJsonPoint
   return pgJsonToArchive(document);
 }
 
-export function importMermaid(mermaid: string, options: { origin?: PgJsonPoint; prgVersion?: string } = {}): PrgArchive {
+export function importMermaid(
+  mermaid: string,
+  options: { origin?: PgJsonPoint; prgVersion?: string } = {},
+): PrgArchive {
   const document = createEmptyPgJson(options.prgVersion);
   const idSet = new Set<string>();
   const mermaidIdMap = new Map<string, string>();
@@ -950,7 +968,9 @@ function parseMarkdown(markdown: string): MarkdownNode[] {
   return roots;
 }
 
-function parseMermaidEdge(line: string): { source: string; target: string; label?: string; lineType: string } | undefined {
+function parseMermaidEdge(
+  line: string,
+): { source: string; target: string; label?: string; lineType: string } | undefined {
   const patterns = [
     { regex: /^(.+?)\s*--\s*["']?(.+?)["']?\s*-->\s*(.+)$/, lineType: "solid" },
     { regex: /^(.+?)\s*-->\s*(.+)$/, lineType: "solid" },
@@ -986,15 +1006,24 @@ function parseMermaidNodeToken(token: string): MermaidNodeToken {
   const trimmed = token.trim().replace(/;$/, "");
   const bracketMatch = trimmed.match(/^([^[]+)\[(.*)\]$/);
   if (bracketMatch) {
-    return { id: unescapeMermaidText(bracketMatch[1].trim()), label: stripQuotes(unescapeMermaidText(bracketMatch[2].trim())) };
+    return {
+      id: unescapeMermaidText(bracketMatch[1].trim()),
+      label: stripQuotes(unescapeMermaidText(bracketMatch[2].trim())),
+    };
   }
   const roundMatch = trimmed.match(/^([^(]+)\((.*)\)$/);
   if (roundMatch) {
-    return { id: unescapeMermaidText(roundMatch[1].trim()), label: stripQuotes(unescapeMermaidText(roundMatch[2].trim())) };
+    return {
+      id: unescapeMermaidText(roundMatch[1].trim()),
+      label: stripQuotes(unescapeMermaidText(roundMatch[2].trim())),
+    };
   }
   const rhombusMatch = trimmed.match(/^([^{}]+)\{(.*)\}$/);
   if (rhombusMatch) {
-    return { id: unescapeMermaidText(rhombusMatch[1].trim()), label: stripQuotes(unescapeMermaidText(rhombusMatch[2].trim())) };
+    return {
+      id: unescapeMermaidText(rhombusMatch[1].trim()),
+      label: stripQuotes(unescapeMermaidText(rhombusMatch[2].trim())),
+    };
   }
   return { id: stripQuotes(unescapeMermaidText(trimmed)) };
 }
@@ -1124,7 +1153,9 @@ function deleteObject(archive: PrgArchive, id: string, changed: Set<string>): vo
     if (!isRecord(edge) || getSerializedType(edge) !== "LineEdge") {
       return false;
     }
-    return resolveObjectList(edge.associationList, [removed, ...archive.stage]).some((target) => getUuid(target) === id);
+    return resolveObjectList(edge.associationList, [removed, ...archive.stage]).some(
+      (target) => getUuid(target) === id,
+    );
   };
 
   for (let i = archive.stage.length - 1; i >= 0; i--) {

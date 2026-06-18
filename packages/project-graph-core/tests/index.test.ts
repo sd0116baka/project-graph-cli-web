@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PROJECT_GRAPH_OPS_SCHEMA,
   applyOperationsToArchive,
   archiveToPgJson,
   exportMarkdown,
@@ -119,5 +120,25 @@ describe("@graphif/project-graph-core", () => {
     expect(pgjson.nodes.map((node) => node.text)).toEqual(["Alpha", "Beta"]);
     expect(pgjson.edges).toHaveLength(1);
     expect(mermaid).toContain("graph TD");
+  });
+
+  it("documents every supported patch operation in the schema", () => {
+    const names = PROJECT_GRAPH_OPS_SCHEMA.$defs.operation.oneOf.map((operation) => operation.properties.op.const);
+
+    expect([...names].sort()).toEqual(
+      [
+        "add_text_node",
+        "connect",
+        "delete_object",
+        "import_markdown",
+        "import_mermaid",
+        "move_node",
+        "rename_node",
+        "resize_node",
+        "set_color",
+        "set_edge_text",
+        "set_node_details_markdown",
+      ].sort(),
+    );
   });
 });

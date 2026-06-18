@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {
+  PROJECT_GRAPH_OPS_SCHEMA,
   applyOperationsToArchive,
   exportMarkdown,
   exportMermaid,
@@ -24,7 +25,7 @@ import { join } from "node:path";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type Command = "inspect" | "validate" | "export" | "import" | "patch" | "upgrade" | "live" | "help";
+type Command = "inspect" | "validate" | "export" | "import" | "patch" | "upgrade" | "schema" | "live" | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
 type ImportFormat = "pgjson" | "markdown" | "mermaid";
 
@@ -50,6 +51,7 @@ Usage:
   project-graph export <file.prg> --format pgjson|markdown|mermaid [-o output] [--root <node-id>]
   project-graph import <input.pg.json|input.md|input.mmd> --format pgjson|markdown|mermaid -o output.prg
   project-graph patch <input.prg> <ops.json> -o output.prg
+  project-graph schema ops [-o output.schema.json]
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
@@ -63,6 +65,7 @@ Commands:
   export    Export a document to pgjson, Markdown, or Mermaid.
   import    Import pgjson, Markdown, or Mermaid into a new .prg document.
   patch     Apply an operation batch and write a new .prg document.
+  schema    Print machine-readable schemas for agent-authored payloads.
   upgrade   Re-encode a .prg archive while preserving attachments and unknown entries.
   live      Send commands to a GUI instance started with --live.
 `;
@@ -155,6 +158,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
+  if (args.command === "schema") {
+    const subject = requirePositional(args, 0, "ops");
+    if (subject !== "ops") {
+      throw new Error(`Unknown schema: ${subject}. Expected ops.`);
+    }
+    await writeTextOrStdout(`${JSON.stringify(PROJECT_GRAPH_OPS_SCHEMA, null, 2)}\n`, args.output);
+    return 0;
+  }
+
   if (args.command === "upgrade") {
     const file = requirePositional(args, 0, "<input.prg>");
     const output = args.inPlace ? file : requireOutput(args);
@@ -236,6 +248,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     rawCommand !== "import" &&
     rawCommand !== "patch" &&
     rawCommand !== "upgrade" &&
+    rawCommand !== "schema" &&
     rawCommand !== "live"
   ) {
     throw new Error(`Unknown command: ${rawCommand}`);

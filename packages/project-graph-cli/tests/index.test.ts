@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { archiveToPgJson } from "@graphif/project-graph-core";
+import { PROJECT_GRAPH_OPS_SCHEMA, archiveToPgJson } from "@graphif/project-graph-core";
 import { readPrgFile } from "@graphif/prg-codec";
 import { main } from "../src/index";
 
@@ -99,5 +99,22 @@ describe("@graphif/project-graph-cli", () => {
     expect(document.nodes.map((node) => node.text)).toEqual(["Root", "Child"]);
     expect(document.nodes.find((node) => node.text === "Root")?.detailsMarkdown).toBe("intro");
     expect(document.edges).toHaveLength(1);
+  });
+
+  it("prints the patch operation schema", async () => {
+    const dir = await createTempDir();
+    const schemaFile = join(dir, "ops.schema.json");
+    const stdoutResult = await runCli(["schema", "ops"]);
+    const fileResult = await runCli(["schema", "ops", "-o", schemaFile]);
+
+    expect(stdoutResult).toMatchObject({ code: 0, stderr: "" });
+    expect(fileResult).toMatchObject({ code: 0, stdout: "", stderr: "" });
+
+    const stdoutSchema = JSON.parse(stdoutResult.stdout) as typeof PROJECT_GRAPH_OPS_SCHEMA;
+    const fileSchema = JSON.parse(await readFile(schemaFile, "utf8")) as typeof PROJECT_GRAPH_OPS_SCHEMA;
+    expect(stdoutSchema.$id).toBe(PROJECT_GRAPH_OPS_SCHEMA.$id);
+    expect(fileSchema.$id).toBe(PROJECT_GRAPH_OPS_SCHEMA.$id);
+    expect(stdoutResult.stdout).toContain("add_text_node");
+    expect(stdoutResult.stdout).toContain("import_mermaid");
   });
 });
