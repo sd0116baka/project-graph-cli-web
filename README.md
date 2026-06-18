@@ -17,6 +17,7 @@ The upstream desktop product remains documented in [app/README.md](app/README.md
 | LAN Web backend     | Shared backend and browser UI for local network use. | [README-web.md](README-web.md) |
 
 The backend-first convergence plan is documented in [docs/backend-first-architecture.md](docs/backend-first-architecture.md).
+Distribution and portable preview packaging are documented in [docs/distribution.md](docs/distribution.md).
 
 ## Development Setup
 

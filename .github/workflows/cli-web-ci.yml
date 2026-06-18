@@ -91,6 +91,17 @@ jobs:
           $DataDir = Join-Path $env:RUNNER_TEMP "project-graph-web-data"
           .\scripts\smoke-web.ps1 -Port 37820 -DataDir $DataDir
 
+      - name: Package portable preview
+        shell: powershell
+        run: .\scripts\package-portable.ps1 -SkipBuild
+
+      - name: Upload portable preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-graph-cli-web-windows-preview
+          path: dist/portable/*.zip
+          if-no-files-found: error
+
       - name: Stop Web server
         if: always()
         shell: powershell
