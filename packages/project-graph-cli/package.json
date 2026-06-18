@@ -24,12 +24,14 @@
   },
   "scripts": {
     "build": "tsdown",
+    "test": "cd ../.. && vitest run --config packages/project-graph-cli/vitest.config.ts",
     "type-check": "tsc",
     "publish": "pnpm publish --no-git-checks"
   },
   "devDependencies": {
     "tsdown": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "dependencies": {
     "@graphif/project-graph-core": "workspace:*",

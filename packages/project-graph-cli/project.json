@@ -8,7 +8,11 @@
     },
     "type-check": {
       "cache": true,
-      "inputs": ["{projectRoot}/src/**/*.ts"]
+      "inputs": ["{projectRoot}/src/**/*.ts", "{projectRoot}/tests/**/*.ts", "{projectRoot}/vitest.config.ts"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["{projectRoot}/src/**/*.ts", "{projectRoot}/tests/**/*.ts", "{projectRoot}/vitest.config.ts"]
     },
     "publish": {
       "dependsOn": ["build"],
