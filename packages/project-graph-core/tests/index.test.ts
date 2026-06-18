@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PGJSON_SCHEMA_VERSION,
   PROJECT_GRAPH_OPS_SCHEMA,
   applyOperationsToArchive,
   archiveToPgJson,
@@ -8,8 +9,9 @@ import {
   importMarkdown,
   importMermaid,
   pgJsonToArchive,
+  type PgJsonDocument,
 } from "../src/index";
-import type { PrgArchive } from "@graphif/prg-codec";
+import { validatePrgArchive, type PrgArchive } from "@graphif/prg-codec";
 
 function createArchive(): PrgArchive {
   return {
@@ -101,6 +103,122 @@ describe("@graphif/project-graph-core", () => {
       target: "node-c",
       text: "next",
     });
+  });
+
+  it("deletes objects without corrupting surviving references", () => {
+    const archive = createArchive();
+    const unusedNode = structuredClone(archive.stage[1]) as Record<string, unknown>;
+    unusedNode.uuid = "node-unused";
+    unusedNode.text = "Unused";
+    archive.stage.splice(1, 0, unusedNode);
+    (archive.stage[3] as Record<string, unknown>).associationList = [{ $: "/0" }, { $: "/2" }];
+
+    const result = applyOperationsToArchive(archive, {
+      ops: [{ op: "delete_object", id: "node-unused" }],
+    });
+    const pgjson = archiveToPgJson(result.archive);
+
+    expect(validatePrgArchive(result.archive).ok).toBe(true);
+    expect(result.changed).toEqual(["node-unused"]);
+    expect(pgjson.nodes.map((node) => node.id)).toEqual(["node-a", "node-b"]);
+    expect(pgjson.edges).toHaveLength(1);
+    expect(pgjson.edges[0]).toMatchObject({ id: "edge-a-b", source: "node-a", target: "node-b" });
+  });
+
+  it("exports self-contained pgjson attachments for unsupported objects", () => {
+    const archive = createArchive();
+    archive.stage.push({ _: "ImageNode", uuid: "image-node", attachmentId: "image-1" });
+    archive.stage.push({
+      _: "LineEdge",
+      uuid: "edge-a-image",
+      associationList: [{ $: "/0" }, { $: "/3" }],
+      text: "image",
+      color: { _: "Color", r: 0, g: 0, b: 0, a: 0 },
+      sourceRectangleRate: { _: "Vector", x: 0.5, y: 0.5 },
+      targetRectangleRate: { _: "Vector", x: 0.5, y: 0.5 },
+      lineType: "solid",
+    });
+    archive.attachments.set("image-1", {
+      id: "image-1",
+      extension: "png",
+      path: "attachments/image-1.png",
+      data: new Uint8Array([1, 2, 3]),
+    });
+
+    const document = archiveToPgJson(archive);
+    const imported = pgJsonToArchive(document);
+
+    expect(document.attachments[0]).toMatchObject({ id: "image-1", dataBase64: "AQID" });
+    expect(imported.attachments.get("image-1")?.data).toEqual(new Uint8Array([1, 2, 3]));
+    expect(validatePrgArchive(imported).ok).toBe(true);
+    expect(archiveToPgJson(imported).edges.find((edge) => edge.id === "edge-a-image")).toMatchObject({
+      source: "node-a",
+      target: "image-node",
+    });
+  });
+
+  it("imports nested sections before their children have been added", () => {
+    const color = { r: 0, g: 0, b: 0, a: 0 };
+    const document: PgJsonDocument = {
+      schemaVersion: PGJSON_SCHEMA_VERSION,
+      prgVersion: "2.4.0",
+      nodes: [
+        {
+          id: "child-node",
+          type: "text",
+          text: "Child node",
+          detailsMarkdown: "",
+          x: 80,
+          y: 100,
+          width: 160,
+          height: 72,
+          color,
+          section: "child-section",
+        },
+      ],
+      sections: [
+        {
+          id: "parent-section",
+          text: "Parent",
+          detailsMarkdown: "",
+          x: 0,
+          y: 0,
+          width: 400,
+          height: 300,
+          color,
+          children: ["child-section"],
+          section: null,
+          collapsed: false,
+          locked: false,
+        },
+        {
+          id: "child-section",
+          text: "Child",
+          detailsMarkdown: "",
+          x: 40,
+          y: 60,
+          width: 260,
+          height: 180,
+          color,
+          children: ["child-node"],
+          section: "parent-section",
+          collapsed: false,
+          locked: false,
+        },
+      ],
+      edges: [],
+      tags: [],
+      attachments: [],
+      unsupportedObjects: [],
+      warnings: [],
+    };
+
+    const archive = pgJsonToArchive(document);
+    const roundTrip = archiveToPgJson(archive);
+
+    expect(validatePrgArchive(archive).ok).toBe(true);
+    expect(roundTrip.sections.find((section) => section.id === "parent-section")?.children).toEqual(["child-section"]);
+    expect(roundTrip.sections.find((section) => section.id === "child-section")?.children).toEqual(["child-node"]);
   });
 
   it("imports and exports markdown", () => {

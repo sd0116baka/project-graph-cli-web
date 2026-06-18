@@ -53,6 +53,7 @@ export interface PgJsonAttachment {
   id: string;
   extension: string;
   path: string;
+  dataBase64?: string;
 }
 
 export interface PgJsonUnsupportedObject {
@@ -141,6 +142,8 @@ const TEXT_NODE_WIDTH = 160;
 const TEXT_NODE_HEIGHT = 72;
 const MARKDOWN_X_SPACING = 260;
 const MARKDOWN_Y_SPACING = 140;
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_VALUES = new Map([...BASE64_ALPHABET].map((char, index) => [char, index]));
 
 export function archiveToPgJson(archive: PrgArchive): PgJsonDocument {
   const warnings: string[] = [];
@@ -246,6 +249,7 @@ export function archiveToPgJson(archive: PrgArchive): PgJsonDocument {
       id: attachment.id,
       extension: attachment.extension,
       path: attachment.path,
+      dataBase64: encodeBase64(attachment.data),
     })),
     unsupportedObjects,
     warnings,
@@ -276,18 +280,55 @@ export function pgJsonToArchive(document: PgJsonDocument, baseArchive?: PrgArchi
     );
   }
 
+  const sectionObjects: Array<{ section: PgJsonSection; object: RecordValue }> = [];
   for (const section of document.sections) {
-    addObject(
-      createSection(section.id, section.text, section.x, section.y, section.width, section.height, {
-        children: section.children.map((id) => refFromId(idToIndex, id)),
-        color: section.color,
-        detailsMarkdown: section.detailsMarkdown,
-        collapsed: section.collapsed,
-        locked: section.locked,
-      }),
-    );
+    const object = createSection(section.id, section.text, section.x, section.y, section.width, section.height, {
+      color: section.color,
+      detailsMarkdown: section.detailsMarkdown,
+      collapsed: section.collapsed,
+      locked: section.locked,
+    });
+    addObject(object);
+    sectionObjects.push({ section, object });
   }
 
+  for (const unsupported of document.unsupportedObjects) {
+    addObject(cloneValue(unsupported.raw) as RecordValue);
+  }
+
+  for (const { section, object } of sectionObjects) {
+    object.children = section.children.map((id) => refFromId(idToIndex, id));
+  }
+
+  const baseAttachments = cloneAttachmentMap(baseArchive?.attachments);
+  const attachments = new Map<string, PrgAttachment>();
+  for (const attachment of document.attachments) {
+    const existing = baseAttachments.get(attachment.id);
+    if (attachment.dataBase64 !== undefined) {
+      attachments.set(attachment.id, {
+        id: attachment.id,
+        extension: attachment.extension,
+        path: attachment.path,
+        data: decodeBase64(attachment.dataBase64),
+      });
+    } else if (existing) {
+      attachments.set(attachment.id, {
+        ...existing,
+        extension: attachment.extension,
+        path: attachment.path,
+        data: new Uint8Array(existing.data),
+      });
+    }
+  }
+
+  for (const [id, attachment] of baseAttachments.entries()) {
+    if (!attachments.has(id)) {
+      attachments.set(id, {
+        ...attachment,
+        data: new Uint8Array(attachment.data),
+      });
+    }
+  }
   for (const edge of document.edges) {
     addObject(
       createLineEdge(edge.id, refFromId(idToIndex, edge.source), refFromId(idToIndex, edge.target), {
@@ -298,17 +339,13 @@ export function pgJsonToArchive(document: PgJsonDocument, baseArchive?: PrgArchi
     );
   }
 
-  for (const unsupported of document.unsupportedObjects) {
-    addObject(cloneValue(unsupported.raw) as RecordValue);
-  }
-
   return {
     metadata: normalizeMetadata(baseArchive?.metadata, document.prgVersion),
     tags: [...document.tags],
     references: cloneReferences(baseArchive?.references),
     readme: baseArchive?.readme,
     stage,
-    attachments: cloneAttachmentMap(baseArchive?.attachments),
+    attachments,
     thumbnail: baseArchive?.thumbnail ? new Uint8Array(baseArchive.thumbnail) : undefined,
     extraEntries: cloneUint8Map(baseArchive?.extraEntries),
   };
@@ -1145,34 +1182,34 @@ function deleteObject(archive: PrgArchive, id: string, changed: Set<string>): vo
     throw new Error(`Cannot find stage object: ${id}`);
   }
 
-  const removed = archive.stage[index];
-  archive.stage.splice(index, 1);
+  const originalStage = [...archive.stage];
   changed.add(id);
 
   const shouldRemoveEdge = (edge: unknown): boolean => {
     if (!isRecord(edge) || getSerializedType(edge) !== "LineEdge") {
       return false;
     }
-    return resolveObjectList(edge.associationList, [removed, ...archive.stage]).some(
-      (target) => getUuid(target) === id,
-    );
+    return resolveObjectList(edge.associationList, originalStage).some((target) => getUuid(target) === id);
   };
 
-  for (let i = archive.stage.length - 1; i >= 0; i--) {
-    const item = archive.stage[i];
+  archive.stage = originalStage.filter((item, itemIndex) => {
+    if (itemIndex === index) {
+      return false;
+    }
     if (shouldRemoveEdge(item)) {
       const edgeId = getUuid(item);
       if (edgeId) {
         changed.add(edgeId);
       }
-      archive.stage.splice(i, 1);
+      return false;
     }
-  }
+    return true;
+  });
 
-  rewriteReferencesAfterDeletion(archive);
+  rewriteReferencesAfterDeletion(archive, originalStage);
 }
 
-function rewriteReferencesAfterDeletion(archive: PrgArchive): void {
+function rewriteReferencesAfterDeletion(archive: PrgArchive, originalStage: unknown[]): void {
   const idToIndex = new Map<string, number>();
   archive.stage.forEach((item, index) => {
     const id = getUuid(item);
@@ -1186,14 +1223,14 @@ function rewriteReferencesAfterDeletion(archive: PrgArchive): void {
       continue;
     }
     if (getSerializedType(item) === "LineEdge") {
-      const refs = resolveObjectList(item.associationList, archive.stage)
+      const refs = resolveObjectList(item.associationList, originalStage)
         .map((target) => getUuid(target))
         .filter((targetId): targetId is string => typeof targetId === "string" && idToIndex.has(targetId))
         .map((targetId) => refFromId(idToIndex, targetId));
       item.associationList = refs;
     }
     if (getSerializedType(item) === "Section") {
-      const refs = resolveObjectList(item.children, archive.stage)
+      const refs = resolveObjectList(item.children, originalStage)
         .map((target) => getUuid(target))
         .filter((targetId): targetId is string => typeof targetId === "string" && idToIndex.has(targetId))
         .map((targetId) => refFromId(idToIndex, targetId));
@@ -1300,6 +1337,56 @@ function cloneUint8Map(source: Map<string, Uint8Array> | undefined): Map<string,
 
 function cloneValue<T>(value: T): T {
   return structuredClone(value) as T;
+}
+
+function encodeBase64(data: Uint8Array): string {
+  let output = "";
+  for (let index = 0; index < data.length; index += 3) {
+    const first = data[index]!;
+    const hasSecond = index + 1 < data.length;
+    const hasThird = index + 2 < data.length;
+    const second = hasSecond ? data[index + 1]! : 0;
+    const third = hasThird ? data[index + 2]! : 0;
+
+    output += BASE64_ALPHABET[first >> 2];
+    output += BASE64_ALPHABET[((first & 0b11) << 4) | (second >> 4)];
+    output += hasSecond ? BASE64_ALPHABET[((second & 0b1111) << 2) | (third >> 6)] : "=";
+    output += hasThird ? BASE64_ALPHABET[third & 0b111111] : "=";
+  }
+  return output;
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const normalized = value.replace(/\s/g, "");
+  if (normalized.length % 4 !== 0) {
+    throw new Error("Invalid base64 attachment data.");
+  }
+
+  const bytes: number[] = [];
+  for (let index = 0; index < normalized.length; index += 4) {
+    const first = requireBase64Value(normalized[index]);
+    const second = requireBase64Value(normalized[index + 1]);
+    const third = normalized[index + 2] === "=" ? undefined : requireBase64Value(normalized[index + 2]);
+    const fourth = normalized[index + 3] === "=" ? undefined : requireBase64Value(normalized[index + 3]);
+
+    bytes.push((first << 2) | (second >> 4));
+    if (third !== undefined) {
+      bytes.push(((second & 0b1111) << 4) | (third >> 2));
+    }
+    if (third !== undefined && fourth !== undefined) {
+      bytes.push(((third & 0b11) << 6) | fourth);
+    }
+  }
+
+  return new Uint8Array(bytes);
+}
+
+function requireBase64Value(char: string | undefined): number {
+  const value = char ? BASE64_VALUES.get(char) : undefined;
+  if (value === undefined) {
+    throw new Error("Invalid base64 attachment data.");
+  }
+  return value;
 }
 
 function createId(): string {

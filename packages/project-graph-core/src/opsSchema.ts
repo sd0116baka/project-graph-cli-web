@@ -22,7 +22,8 @@ export const PROJECT_GRAPH_OPS_SCHEMA = {
       properties: {
         baseRevision: {
           type: "integer",
-          description: "Optional optimistic revision marker for live clients.",
+          description:
+            "Optional caller revision marker reserved for clients. It is currently accepted but not enforced.",
         },
         ops: {
           type: "array",
