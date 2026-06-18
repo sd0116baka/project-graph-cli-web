@@ -1,3 +1,4 @@
+import { Dialog } from "@/components/ui/dialog";
 import type { FileSystemProvider } from "@/core/interfaces/Service";
 import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import type { DirEntry } from "@tauri-apps/plugin-fs";
@@ -23,7 +24,16 @@ export class FileSystemProviderServer implements FileSystemProvider {
   }
 
   async write(uri: URI, content: Uint8Array): Promise<void> {
-    await ServerProjectManager.writeProjectBlob(ServerProjectManager.projectIdFromUri(uri), content);
+    try {
+      await ServerProjectManager.writeProjectBlob(ServerProjectManager.projectIdFromUri(uri), content);
+    } catch (error) {
+      void Dialog.buttons(
+        "服务器项目保存失败",
+        `${ServerProjectManager.formatError(error)}\n\n${ServerProjectManager.recoveryHint(error)}`,
+        [{ id: "ok", label: "知道了" }],
+      );
+      throw error;
+    }
   }
 
   async remove(uri: URI): Promise<void> {

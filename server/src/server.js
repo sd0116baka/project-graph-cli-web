@@ -87,6 +87,21 @@ async function handleApi(req, res, requestUrl) {
     return;
   }
 
+  if (req.method === "GET" && requestUrl.pathname === "/api/server-info") {
+    sendJson(res, 200, {
+      ok: true,
+      host,
+      port,
+      dataDirName: path.basename(dataDir),
+      staticDirName: staticDir ? path.basename(staticDir) : null,
+      customDataDir: Boolean(process.env.PG_WEB_DATA_DIR),
+      staticEnabled: Boolean(staticDir),
+      authEnabled: Boolean(authPassword),
+      allowedOrigin: process.env.PG_WEB_ALLOWED_ORIGIN ?? "*",
+    });
+    return;
+  }
+
   if (segments.length === 2 && segments[1] === "projects") {
     if (req.method === "GET") {
       await expireLocks();

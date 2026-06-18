@@ -28,9 +28,20 @@ afterEach(async () => {
 describe("@graphif/project-graph-web-server", () => {
   it("patches a project archive without dropping thumbnail data", async () => {
     const server = await startServer();
+    const info = await requestJson(server, "/api/server-info");
     const projectId = await createProject(server);
     const originalArchive = createArchiveWithThumbnail();
     const originalEtag = await putArchive(server, projectId, originalArchive);
+
+    expect(info.response.status).toBe(200);
+    expect(info.body).toMatchObject({
+      ok: true,
+      host: "127.0.0.1",
+      port: server.port,
+      authEnabled: false,
+      customDataDir: true,
+    });
+    expect(info.body.dataDirName).toContain("project-graph-web-server-test-");
 
     const patch = await requestJson(server, `/api/projects/${projectId}/patch`, {
       method: "POST",
@@ -81,6 +92,20 @@ describe("@graphif/project-graph-web-server", () => {
       code: "etag_mismatch",
     });
   });
+
+  it("keeps server info behind authentication when auth is enabled", async () => {
+    const server = await startServer({ authPassword: "secret" });
+
+    const unauthenticated = await requestJson(server, "/api/server-info");
+    const authenticated = await requestJson(server, "/api/server-info", {
+      headers: { Authorization: "Basic cGc6c2VjcmV0" },
+    });
+
+    expect(unauthenticated.response.status).toBe(401);
+    expect(unauthenticated.body).toMatchObject({ ok: false, code: "authentication_required" });
+    expect(authenticated.response.status).toBe(200);
+    expect(authenticated.body).toMatchObject({ ok: true, authEnabled: true });
+  });
 });
 
 function createArchiveWithThumbnail() {
@@ -90,7 +115,7 @@ function createArchiveWithThumbnail() {
   return archive;
 }
 
-async function startServer() {
+async function startServer(options = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), "project-graph-web-server-test-"));
   tempDirs.push(dataDir);
   const port = await getFreePort();
@@ -99,7 +124,7 @@ async function startServer() {
     cwd: root,
     env: {
       ...process.env,
-      PG_WEB_AUTH_PASSWORD: "",
+      PG_WEB_AUTH_PASSWORD: options.authPassword ?? "",
       PG_WEB_DATA_DIR: dataDir,
       PG_WEB_HOST: "127.0.0.1",
       PG_WEB_PORT: String(port),

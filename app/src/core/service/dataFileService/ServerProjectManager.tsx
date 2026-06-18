@@ -1,6 +1,8 @@
 import { URI } from "vscode-uri";
 
 export namespace ServerProjectManager {
+  export const errorEventName = "project-graph-server-error";
+
   export type ServerProject = {
     id: string;
     name: string;
@@ -22,6 +24,48 @@ export namespace ServerProjectManager {
     size: number;
     createdAt: string;
   };
+
+  export type ServerInfo = {
+    ok: true;
+    host: string;
+    port: number;
+    dataDirName: string;
+    staticDirName: string | null;
+    customDataDir: boolean;
+    staticEnabled: boolean;
+    authEnabled: boolean;
+    allowedOrigin: string;
+    serverUrl: string;
+    clientName: string;
+  };
+
+  export type ServerProjectErrorDetail = {
+    status: number;
+    code?: string;
+    message: string;
+    recovery: string;
+    path: string;
+    details?: unknown;
+  };
+
+  export class ServerProjectError extends Error {
+    constructor(readonly detail: ServerProjectErrorDetail) {
+      super(detail.message);
+      this.name = "ServerProjectError";
+    }
+
+    get status(): number {
+      return this.detail.status;
+    }
+
+    get code(): string | undefined {
+      return this.detail.code;
+    }
+
+    get recovery(): string {
+      return this.detail.recovery;
+    }
+  }
 
   const clientIdStorageKey = "project-graph-web-client-id";
   const clientNameStorageKey = "project-graph-web-client-name";
@@ -45,6 +89,15 @@ export namespace ServerProjectManager {
   export async function listProjects(): Promise<ServerProject[]> {
     const data = await apiJson<{ projects: ServerProject[] }>("/api/projects");
     return data.projects;
+  }
+
+  export async function getServerInfo(): Promise<ServerInfo> {
+    const data = await apiJson<Omit<ServerInfo, "serverUrl" | "clientName">>("/api/server-info");
+    return {
+      ...data,
+      serverUrl: serverBaseUrl() || (typeof window !== "undefined" ? window.location.origin : ""),
+      clientName: getClientName(),
+    };
   }
 
   export async function createProject(name: string): Promise<ServerProject> {
@@ -92,7 +145,7 @@ export namespace ServerProjectManager {
       headers: clientHeaders(),
     });
     if (response.status === 404) return false;
-    if (!response.ok) await throwResponseError(response);
+    if (!response.ok) await throwResponseError(response, `/api/projects/${encodeURIComponent(id)}/blob`);
     updateProjectEtag(id, response);
     return true;
   }
@@ -169,6 +222,23 @@ export namespace ServerProjectManager {
     return lock.clientName || shortClientId(lock.clientId);
   }
 
+  export function formatError(error: unknown): string {
+    if (error instanceof ServerProjectError) {
+      return error.message;
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
+  }
+
+  export function recoveryHint(error: unknown): string {
+    if (error instanceof ServerProjectError) {
+      return error.recovery;
+    }
+    return "请确认 Web 后端仍在运行，然后刷新项目列表重试。";
+  }
+
   async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await apiFetch(path, init);
     return (await response.json()) as T;
@@ -183,12 +253,12 @@ export namespace ServerProjectManager {
       ...init,
       headers,
     });
-    if (!response.ok) await throwResponseError(response);
+    if (!response.ok) await throwResponseError(response, path);
     return response;
   }
 
   function apiUrl(path: string): string {
-    const base = import.meta.env.LR_PROJECT_GRAPH_SERVER_URL?.replace(/\/$/, "") ?? "";
+    const base = serverBaseUrl();
     if (base) {
       return `${base}${path}`;
     }
@@ -196,6 +266,10 @@ export namespace ServerProjectManager {
       return new URL(path, window.location.origin).toString();
     }
     return path;
+  }
+
+  function serverBaseUrl(): string {
+    return import.meta.env.LR_PROJECT_GRAPH_SERVER_URL?.replace(/\/$/, "") ?? "";
   }
 
   function updateProjectEtag(id: string, response: Response): void {
@@ -213,20 +287,37 @@ export namespace ServerProjectManager {
     };
   }
 
-  async function throwResponseError(response: Response): Promise<never> {
+  async function throwResponseError(response: Response, path: string): Promise<never> {
     let message = `${response.status} ${response.statusText}`;
+    let code: string | undefined;
+    let details: unknown;
     try {
-      const data = (await response.json()) as { error?: string };
+      const data = (await response.clone().json()) as { code?: string; error?: string; details?: unknown };
       if (data.error) message = data.error;
+      code = data.code;
+      details = data.details;
     } catch {
       const text = await response.text().catch(() => "");
       if (text) message = text;
     }
+    let recovery = "请确认 Web 后端仍在运行，然后刷新项目列表重试。";
     if (response.status === 423) {
       message = "项目正在被另一台设备编辑，请稍后再试";
+      recovery = "刷新项目列表查看锁定者；如果是自己的旧页面占用，关闭旧页面后等待锁过期。";
     } else if (response.status === 412) {
       message = "服务器上的项目版本已经变化，请刷新后再保存";
+      recovery = "先刷新项目列表确认最新更新时间；如当前画布仍有未保存内容，请另存为本地 .prg 后再重新打开服务器项目。";
+    } else if (response.status === 401) {
+      message = "需要 Web 后端认证";
+      recovery = "请使用启动脚本输出的账号密码访问 Web 页面，或检查浏览器是否仍保留认证状态。";
     }
-    throw new Error(message);
+    const detail = { status: response.status, code, message, recovery, path, details };
+    dispatchServerError(detail);
+    throw new ServerProjectError(detail);
+  }
+
+  function dispatchServerError(detail: ServerProjectErrorDetail): void {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent<ServerProjectErrorDetail>(errorEventName, { detail }));
   }
 }

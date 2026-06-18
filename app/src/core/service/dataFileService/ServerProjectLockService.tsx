@@ -9,7 +9,7 @@ export class ServerProjectLockService {
   private heartbeatHandle: number | undefined;
   private disposed = false;
 
-  constructor(private readonly project: Project) {
+  constructor(project: Project) {
     if (project.uri.scheme !== "server") return;
     this.projectId = ServerProjectManager.projectIdFromUri(project.uri);
     this.heartbeatHandle = window.setInterval(() => void this.renewLock(), this.heartbeatMs);
@@ -35,7 +35,7 @@ export class ServerProjectLockService {
     try {
       await ServerProjectManager.lockProject(this.projectId);
     } catch (error) {
-      toast.error(`服务器项目锁续期失败：${String(error)}`);
+      toast.error(`服务器项目锁续期失败：${ServerProjectManager.formatError(error)}`);
     }
   }
 
@@ -44,7 +44,7 @@ export class ServerProjectLockService {
     try {
       await ServerProjectManager.unlockProject(this.projectId);
     } catch (error) {
-      console.warn("释放服务器项目锁失败:", error, this.project.uri.toString());
+      toast.warning(`释放服务器项目锁失败：${ServerProjectManager.formatError(error)}`);
     }
   }
 }

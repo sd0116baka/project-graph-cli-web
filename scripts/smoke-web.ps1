@@ -70,6 +70,12 @@ if ($null -eq $ProjectsBefore.projects) {
 }
 Write-Host "OK: project list"
 
+$ServerInfo = Invoke-RestMethod -Uri "$Base/api/server-info" -Headers $Headers -TimeoutSec 5
+if (-not $ServerInfo.ok -or -not $ServerInfo.dataDirName) {
+  throw "Server info smoke failed"
+}
+Write-Host "OK: server info"
+
 $TempDir = Join-Path ([IO.Path]::GetTempPath()) ("project-graph-web-smoke-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 $CliPath = Join-Path $Root "packages\project-graph-cli\dist\index.mjs"
