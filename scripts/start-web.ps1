@@ -37,6 +37,15 @@ function Test-PortBusy([int]$Value) {
   }
 }
 
+function Test-ProjectGraphHealth([int]$Value) {
+  try {
+    $Health = Invoke-RestMethod -Uri "http://127.0.0.1:$Value/api/health" -Method Get -TimeoutSec 2
+    return [bool]$Health.ok
+  } catch {
+    return $false
+  }
+}
+
 function Get-FreePort([int]$Start) {
   for ($Value = $Start; $Value -lt ($Start + 100); $Value++) {
     if (-not (Test-PortBusy $Value)) {
@@ -138,6 +147,39 @@ if (-not $NoAuth) {
   }
 }
 
+$Runtime = Read-WebRuntime -Root $Root
+if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port") -and $Runtime.dataDir) {
+  $RuntimePort = [int]$Runtime.port
+  if ((Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir) -and (Test-ProjectGraphHealth $RuntimePort)) {
+    $LanIp = Get-LanIp
+    $ExistingAuthEnabled = if ($Runtime.PSObject.Properties.Name -contains "authEnabled") { [bool]$Runtime.authEnabled } else { -not $NoAuth }
+    $ExistingAuthUser = if (($Runtime.PSObject.Properties.Name -contains "authUser") -and $Runtime.authUser) { [string]$Runtime.authUser } else { $AuthUser }
+    $ExistingAuthPassword = $AuthPassword
+    if ($ExistingAuthEnabled -and (Test-Path $AuthPath)) {
+      $ExistingAuthConfig = Get-Content -Raw $AuthPath | ConvertFrom-Json
+      $ExistingAuthUser = if ($ExistingAuthConfig.user) { [string]$ExistingAuthConfig.user } else { $ExistingAuthUser }
+      $ExistingAuthPassword = if ($ExistingAuthConfig.password) { [string]$ExistingAuthConfig.password } else { $ExistingAuthPassword }
+    }
+    Write-WebBackendRegistryTarget -Port $RuntimePort -DataDir $DataDir -AuthEnabled $ExistingAuthEnabled -AuthUser $ExistingAuthUser -LanIp $LanIp
+    Write-WebLine ""
+    Write-WebLine "Project Graph Web is already running."
+    Write-WebLine "Local:  http://127.0.0.1:$RuntimePort"
+    Write-WebLine "LAN:    http://$LanIp`:$RuntimePort"
+    Write-WebLine "Data:   $DataDir"
+    if ($ExistingAuthEnabled) {
+      Write-WebLine "User:   $ExistingAuthUser"
+      if ($LogPath) {
+        Write-WebLine "Pass:   saved in $AuthPath"
+      } else {
+        Write-WebLine "Pass:   $ExistingAuthPassword"
+      }
+    } else {
+      Write-WebLine "Auth:   disabled"
+    }
+    return
+  }
+}
+
 $SelectedPort = Get-FreePort $Port
 $LanIp = Get-LanIp
 
@@ -180,7 +222,7 @@ if ($LogPath) {
 }
 Write-WebLine ""
 
-Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser
+Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser -LanIp $LanIp
 
 if ($LogPath) {
   & node server/src/server.js 2>&1 | Tee-Object -FilePath $LogPath -Append

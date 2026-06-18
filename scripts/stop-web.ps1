@@ -5,6 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
+
 function Test-ProjectGraphHealth([int]$Port) {
   try {
     $Health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -Method Get -TimeoutSec 2
@@ -27,6 +30,7 @@ if (-not $Targets) {
 foreach ($Target in $Targets) {
   Write-Host "Stopping Project Graph Web PID $($Target.OwningProcess) on port $($Target.LocalPort)..."
   Stop-Process -Id $Target.OwningProcess -Force -ErrorAction Stop
+  Remove-WebBackendRegistryTarget -Port $Target.LocalPort
 }
 
 Write-Host "Stopped."

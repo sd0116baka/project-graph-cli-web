@@ -26,6 +26,7 @@ const host = process.env.HOST ?? process.env.PG_WEB_HOST ?? "0.0.0.0";
 const authUser = process.env.PG_WEB_AUTH_USER ?? "pg";
 const authPassword = process.env.PG_WEB_AUTH_PASSWORD ?? "";
 const projectMutationQueues = new Map();
+const apiVersion = "0.1";
 
 await ensureLayout();
 
@@ -78,6 +79,11 @@ server.listen(port, host, () => {
   if (authPassword) console.log(`Authentication: Basic user ${authUser}`);
 });
 
+function isLoopbackHost(value) {
+  const normalized = String(value).replace(/^\[/, "").replace(/\]$/, "");
+  return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
+}
+
 async function handleApi(req, res, requestUrl) {
   const segments = requestUrl.pathname.split("/").filter(Boolean);
   const clientId = getClientId(req);
@@ -90,6 +96,8 @@ async function handleApi(req, res, requestUrl) {
   if (req.method === "GET" && requestUrl.pathname === "/api/server-info") {
     sendJson(res, 200, {
       ok: true,
+      name: "Project Graph Backend",
+      apiVersion,
       host,
       port,
       dataDirName: path.basename(dataDir),
@@ -97,7 +105,22 @@ async function handleApi(req, res, requestUrl) {
       customDataDir: Boolean(process.env.PG_WEB_DATA_DIR),
       staticEnabled: Boolean(staticDir),
       authEnabled: Boolean(authPassword),
+      authMode: authPassword ? "basic" : "none",
+      lanMode: !isLoopbackHost(host),
       allowedOrigin: process.env.PG_WEB_ALLOWED_ORIGIN ?? "*",
+      capabilities: {
+        projects: true,
+        blobs: true,
+        query: true,
+        patch: true,
+        export: true,
+        validate: false,
+        import: false,
+        history: true,
+        restore: true,
+        locks: true,
+        events: false,
+      },
     });
     return;
   }

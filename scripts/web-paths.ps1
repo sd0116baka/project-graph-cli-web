@@ -65,6 +65,97 @@ function Get-WebRuntimePath {
   return Join-Path $Root "server\web-runtime.json"
 }
 
+function Get-WebBackendRegistryPath {
+  if (-not [string]::IsNullOrWhiteSpace($env:PROJECT_GRAPH_BACKEND_REGISTRY)) {
+    return [IO.Path]::GetFullPath($env:PROJECT_GRAPH_BACKEND_REGISTRY)
+  }
+  return Join-Path ([IO.Path]::GetTempPath()) "project-graph-backends.json"
+}
+
+function Read-WebBackendRegistry {
+  $RegistryPath = Get-WebBackendRegistryPath
+  if (-not (Test-Path $RegistryPath)) {
+    return @()
+  }
+
+  try {
+    $Registry = Get-Content -Raw $RegistryPath | ConvertFrom-Json
+  } catch {
+    Write-Warning "Ignoring unreadable backend registry at $RegistryPath. $($_.Exception.Message)"
+    return @()
+  }
+  if ($Registry -and ($Registry.PSObject.Properties.Name -contains "targets")) {
+    return @($Registry.targets)
+  }
+  return @($Registry)
+}
+
+function Write-WebBackendRegistryTarget {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int]$Port,
+    [Parameter(Mandatory = $true)]
+    [string]$DataDir,
+    [Parameter(Mandatory = $true)]
+    [bool]$AuthEnabled,
+    [Parameter(Mandatory = $true)]
+    [string]$AuthUser,
+    [Parameter(Mandatory = $true)]
+    [string]$LanIp
+  )
+
+  $RegistryPath = Get-WebBackendRegistryPath
+  New-Item -ItemType Directory -Path (Split-Path -Parent $RegistryPath) -Force | Out-Null
+  $Existing = @(Read-WebBackendRegistry | Where-Object { [int]$_.port -ne $Port })
+  $Target = [ordered]@{
+    id = "local-$Port"
+    kind = "daemon"
+    url = "http://127.0.0.1:$Port"
+    localUrl = "http://127.0.0.1:$Port"
+    lanUrl = "http://$LanIp`:$Port"
+    port = $Port
+    apiVersion = "0.1"
+    authMode = if ($AuthEnabled) { "basic" } else { "none" }
+    authUser = if ($AuthEnabled) { $AuthUser } else { "" }
+    lanMode = $true
+    dataDirName = Split-Path -Leaf $DataDir
+    localDataDir = $DataDir
+    startedAt = (Get-Date).ToUniversalTime().ToString("o")
+    capabilities = [ordered]@{
+      projects = $true
+      blobs = $true
+      query = $true
+      patch = $true
+      export = $true
+      validate = $false
+      import = $false
+      history = $true
+      restore = $true
+      locks = $true
+      events = $false
+    }
+  }
+  @{ targets = @($Existing + $Target) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $RegistryPath -Encoding UTF8
+}
+
+function Remove-WebBackendRegistryTarget {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int]$Port
+  )
+
+  $RegistryPath = Get-WebBackendRegistryPath
+  if (-not (Test-Path $RegistryPath)) {
+    return
+  }
+  $Remaining = @(Read-WebBackendRegistry | Where-Object { [int]$_.port -ne $Port })
+  if ($Remaining.Count -eq 0) {
+    Remove-Item -LiteralPath $RegistryPath -Force
+    return
+  }
+  @{ targets = $Remaining } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $RegistryPath -Encoding UTF8
+}
+
 function Write-WebRuntime {
   param(
     [Parameter(Mandatory = $true)]
@@ -77,7 +168,8 @@ function Write-WebRuntime {
     [int]$Port,
     [Parameter(Mandatory = $true)]
     [bool]$AuthEnabled,
-    [string]$AuthUser = ""
+    [string]$AuthUser = "",
+    [string]$LanIp = "127.0.0.1"
   )
 
   $RuntimePath = Get-WebRuntimePath -Root $Root
@@ -90,6 +182,8 @@ function Write-WebRuntime {
     authUser = $AuthUser
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
   } | ConvertTo-Json | Set-Content -LiteralPath $RuntimePath -Encoding UTF8
+
+  Write-WebBackendRegistryTarget -Port $Port -DataDir $DataDir -AuthEnabled $AuthEnabled -AuthUser $AuthUser -LanIp $LanIp
 }
 
 function Assert-SafeWebDataDir {
