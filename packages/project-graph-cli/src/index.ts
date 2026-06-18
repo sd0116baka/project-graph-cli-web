@@ -35,6 +35,8 @@ interface ParsedArgs {
   format?: string;
   output?: string;
   root?: string;
+  document?: string;
+  baseRevision?: number;
   port?: number;
   token?: string;
   json: boolean;
@@ -55,8 +57,9 @@ Usage:
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
-  project-graph live export --format pgjson|markdown|mermaid [-o output] [--root <node-id>]
-  project-graph live patch <ops.json> [--json] [--no-save]
+  project-graph live inspect [--document <id>] [--json]
+  project-graph live export --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--document <id>] [--json]
+  project-graph live patch <ops.json> [--document <id>] [--base-revision <n>] [--json] [--no-save]
   project-graph help
 
 Commands:
@@ -187,6 +190,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let format: string | undefined;
   let output: string | undefined;
   let root: string | undefined;
+  let document: string | undefined;
+  let baseRevision: number | undefined;
   let port: number | undefined;
   let token: string | undefined;
   let json = false;
@@ -212,6 +217,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       output = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--root") {
       root = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--document") {
+      document = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--base-revision") {
+      baseRevision = Number(requireFlagValue(argv, ++index, arg));
     } else if (arg === "--port") {
       port = Number(requireFlagValue(argv, ++index, arg));
     } else if (arg === "--token") {
@@ -232,6 +241,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       format,
       output,
       root,
+      document,
+      baseRevision,
       port,
       token,
       json,
@@ -260,6 +271,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     format,
     output,
     root,
+    document,
+    baseRevision,
     port,
     token,
     json,
@@ -402,19 +415,23 @@ async function handleLiveCommand(args: ParsedArgs): Promise<number> {
   }
 
   if (subcommand === "inspect") {
-    const response = await sendLiveRequest("inspect", {}, args);
+    const response = await sendLiveRequest("inspect", { document: args.document }, args);
     printLiveResult(response, args.json);
     return response.ok ? 0 : 1;
   }
 
   if (subcommand === "export") {
     const format = requireExportFormat(args.format);
-    const response = await sendLiveRequest("export", { format, root: args.root }, args);
+    const response = await sendLiveRequest("export", { format, root: args.root, document: args.document }, args);
     if (!response.ok) {
       console.error(response.error ?? "Live export failed.");
       return 1;
     }
-    const content = typeof response.result === "string" ? response.result : JSON.stringify(response.result, null, 2);
+    if (args.json) {
+      await writeTextOrStdout(`${JSON.stringify(response.result ?? null, null, 2)}\n`, args.output);
+      return 0;
+    }
+    const content = getLiveExportContent(response.result);
     await writeTextOrStdout(content.endsWith("\n") ? content : `${content}\n`, args.output);
     return 0;
   }
@@ -424,13 +441,41 @@ async function handleLiveCommand(args: ParsedArgs): Promise<number> {
     if (!patchFile) {
       throw new Error(`Missing <ops.json>.\n\n${helpText}`);
     }
-    const patch = parsePatch(await readFile(patchFile, "utf8"));
-    const response = await sendLiveRequest("patch", { ...patch, save: args.livePatchSave }, args);
+    const patch = withCliBaseRevision(parsePatch(await readFile(patchFile, "utf8")), args.baseRevision);
+    const response = await sendLiveRequest(
+      "patch",
+      { ...patch, document: args.document, save: args.livePatchSave },
+      args,
+    );
     printLiveResult(response, args.json);
     return response.ok ? 0 : 1;
   }
 
   throw new Error(`Unknown live subcommand: ${subcommand}`);
+}
+
+function getLiveExportContent(result: unknown): string {
+  if (typeof result === "string") {
+    return result;
+  }
+  const record = asRecord(result);
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  return JSON.stringify(result, null, 2);
+}
+
+function withCliBaseRevision(patch: ProjectGraphPatch, baseRevision: number | undefined): ProjectGraphPatch {
+  if (baseRevision === undefined) {
+    return patch;
+  }
+  if (!Number.isInteger(baseRevision)) {
+    throw new Error("--base-revision must be an integer.");
+  }
+  if (patch.baseRevision !== undefined && patch.baseRevision !== baseRevision) {
+    throw new Error(`Patch baseRevision ${patch.baseRevision} does not match --base-revision ${baseRevision}.`);
+  }
+  return { ...patch, baseRevision };
 }
 
 function printLiveResult(response: LiveResponse, json: boolean): void {
@@ -447,6 +492,13 @@ function printLiveResult(response: LiveResponse, json: boolean): void {
   } else {
     printJson(response.result);
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
 }
 
 async function sendLiveRequest(method: string, params: unknown, args: ParsedArgs): Promise<LiveResponse> {

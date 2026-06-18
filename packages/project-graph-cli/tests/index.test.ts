@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { readPrgFile } from "@graphif/prg-codec";
 import { main } from "../src/index";
 
 const tempDirs: string[] = [];
+const servers: Server[] = [];
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "project-graph-cli-test-"));
@@ -48,8 +50,48 @@ async function runCli(args: string[]): Promise<{ code: number; stdout: string; s
   }
 }
 
+async function startLiveServer(
+  handler: (request: Record<string, unknown>) => unknown,
+): Promise<{ port: number; requests: Array<Record<string, unknown>> }> {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = createServer((socket) => {
+    let body = "";
+    socket.on("data", (chunk) => {
+      body += chunk.toString("utf8");
+    });
+    socket.on("end", () => {
+      const request = JSON.parse(body) as Record<string, unknown>;
+      requests.push(request);
+      socket.end(
+        JSON.stringify({
+          id: request.id,
+          ok: true,
+          result: handler(request),
+        }),
+      );
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((resolvePromise) => {
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Cannot resolve fake live server address.");
+  }
+  return { port: address.port, requests };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolvePromise, reject) => {
+          server.close((error) => (error ? reject(error) : resolvePromise()));
+        }),
+    ),
+  );
 });
 
 describe("@graphif/project-graph-cli", () => {
@@ -116,5 +158,88 @@ describe("@graphif/project-graph-cli", () => {
     expect(fileSchema.$id).toBe(PROJECT_GRAPH_OPS_SCHEMA.$id);
     expect(stdoutResult.stdout).toContain("add_text_node");
     expect(stdoutResult.stdout).toContain("import_mermaid");
+  });
+
+  it("sends document and base revision to live patch", async () => {
+    const dir = await createTempDir();
+    const patchFile = join(dir, "ops.json");
+    await writeFile(patchFile, JSON.stringify([{ op: "rename_node", id: "node-a", text: "Alpha" }]), "utf8");
+    const server = await startLiveServer(() => ({ changed: ["node-a"], revision: 8 }));
+
+    const result = await runCli([
+      "live",
+      "patch",
+      patchFile,
+      "--document",
+      "file:///graph.prg",
+      "--base-revision",
+      "7",
+      "--port",
+      String(server.port),
+      "--token",
+      "secret",
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]).toMatchObject({
+      token: "secret",
+      method: "patch",
+      params: {
+        document: "file:///graph.prg",
+        baseRevision: 7,
+        save: true,
+        ops: [{ op: "rename_node", id: "node-a", text: "Alpha" }],
+      },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ changed: ["node-a"], revision: 8 });
+  });
+
+  it("unwraps live export content unless json output is requested", async () => {
+    const dir = await createTempDir();
+    const outputFile = join(dir, "current.pg.json");
+    const server = await startLiveServer(() => ({
+      document: { id: "file:///graph.prg" },
+      revision: 3,
+      format: "pgjson",
+      content: '{"schemaVersion":"0.1"}\n',
+    }));
+
+    const contentResult = await runCli([
+      "live",
+      "export",
+      "--format",
+      "pgjson",
+      "--document",
+      "file:///graph.prg",
+      "--port",
+      String(server.port),
+      "--token",
+      "secret",
+      "-o",
+      outputFile,
+    ]);
+    const jsonResult = await runCli([
+      "live",
+      "export",
+      "--format",
+      "pgjson",
+      "--document",
+      "file:///graph.prg",
+      "--port",
+      String(server.port),
+      "--token",
+      "secret",
+      "--json",
+    ]);
+
+    expect(contentResult).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(await readFile(outputFile, "utf8")).toBe('{"schemaVersion":"0.1"}\n');
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({ revision: 3, content: '{"schemaVersion":"0.1"}\n' });
+    expect(server.requests.map((request) => request.params)).toEqual([
+      { format: "pgjson", document: "file:///graph.prg" },
+      { format: "pgjson", document: "file:///graph.prg" },
+    ]);
   });
 });
