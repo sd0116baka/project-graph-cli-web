@@ -19,11 +19,11 @@ Fork: `sd0116baka/project-graph-cli-web`
 
 ## Phase 2 - CLI Access To The Web Backend
 
-- [ ] `P2-1` Add `project-graph server list`.
-- [ ] `P2-2` Add `project-graph server query <project-id>`.
-- [ ] `P2-3` Add `project-graph server patch <project-id> ops.json`.
-- [ ] `P2-4` Add `project-graph server export <project-id>`.
-- [ ] `P2-5` Support `--url`, `--user`, and `--password`, plus environment variables for agent-friendly authentication.
+- [x] `P2-1` Add `project-graph server list`.
+- [x] `P2-2` Add `project-graph server query <project-id>`.
+- [x] `P2-3` Add `project-graph server patch <project-id> ops.json`.
+- [x] `P2-4` Add `project-graph server export <project-id>`.
+- [x] `P2-5` Support `--url`, `--user`, and `--password`, plus environment variables for agent-friendly authentication.
 
 ## Phase 3 - Tests And Safety Boundaries
 

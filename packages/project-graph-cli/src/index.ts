@@ -38,6 +38,7 @@ type Command =
   | "query"
   | "upgrade"
   | "schema"
+  | "server"
   | "live"
   | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
@@ -53,6 +54,10 @@ interface ParsedArgs {
   baseRevision?: number;
   port?: number;
   token?: string;
+  serverUrl?: string;
+  serverUser?: string;
+  serverPassword?: string;
+  etag?: string;
   queryKind?: string;
   queryText?: string;
   queryId?: string;
@@ -76,6 +81,10 @@ Usage:
   project-graph query <file.prg> [--kind all|node|section|edge|attachment|unsupported] [--text <contains>] [--id <id>] [--section <id|null>] [--limit <n>] [--json]
   project-graph schema ops [-o output.schema.json]
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
+  project-graph server list [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph server query <project-id> [--url <url>] [--user <user> --password <password>] [--kind all|node|section|edge|attachment|unsupported] [--text <contains>] [--id <id>] [--section <id|null>] [--limit <n>] [--json]
+  project-graph server patch <project-id> <ops.json> [--url <url>] [--user <user> --password <password>] [--etag <etag>] [--json]
+  project-graph server export <project-id> --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
   project-graph live open <file.prg|file-uri> [--json] [--port <port> --token <token>]
@@ -94,7 +103,13 @@ Commands:
   query     Query graph objects for agent-friendly lookup.
   schema    Print machine-readable schemas for agent-authored payloads.
   upgrade   Re-encode a .prg archive while preserving attachments and unknown entries.
+  server    Send commands to a Project Graph Web backend.
   live      Send commands to a GUI instance started with --live.
+
+Environment:
+  PROJECT_GRAPH_SERVER_URL       Default Web backend URL.
+  PROJECT_GRAPH_SERVER_USER      Basic auth user for Web backend requests.
+  PROJECT_GRAPH_SERVER_PASSWORD  Basic auth password for Web backend requests.
 `;
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -214,6 +229,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return handleLiveCommand(args);
   }
 
+  if (args.command === "server") {
+    return handleServerCommand(args);
+  }
+
   return 2;
 }
 
@@ -226,6 +245,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   let baseRevision: number | undefined;
   let port: number | undefined;
   let token: string | undefined;
+  let serverUrl: string | undefined;
+  let serverUser: string | undefined;
+  let serverPassword: string | undefined;
+  let etag: string | undefined;
   let queryKind: string | undefined;
   let queryText: string | undefined;
   let queryId: string | undefined;
@@ -263,6 +286,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       port = Number(requireFlagValue(argv, ++index, arg));
     } else if (arg === "--token") {
       token = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--url") {
+      serverUrl = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--user") {
+      serverUser = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--password") {
+      serverPassword = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--etag" || arg === "--if-match") {
+      etag = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--kind" || arg === "--type") {
       queryKind = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--text") {
@@ -296,6 +327,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       baseRevision,
       port,
       token,
+      serverUrl,
+      serverUser,
+      serverPassword,
+      etag,
       queryKind,
       queryText,
       queryId,
@@ -318,6 +353,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     rawCommand !== "query" &&
     rawCommand !== "upgrade" &&
     rawCommand !== "schema" &&
+    rawCommand !== "server" &&
     rawCommand !== "live"
   ) {
     throw new Error(`Unknown command: ${rawCommand}`);
@@ -333,6 +369,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     baseRevision,
     port,
     token,
+    serverUrl,
+    serverUser,
+    serverPassword,
+    etag,
     queryKind,
     queryText,
     queryId,
@@ -491,6 +531,187 @@ async function writeTextOrStdout(content: string, output: string | undefined): P
   } else {
     process.stdout.write(content);
   }
+}
+
+interface ServerProject {
+  id: string;
+  name: string;
+  updatedAt?: string;
+  size?: number;
+  lock?: {
+    clientId: string;
+    clientName?: string;
+    expiresAt?: string;
+  } | null;
+}
+
+async function handleServerCommand(args: ParsedArgs): Promise<number> {
+  const subcommand = args.positionals[0] ?? "help";
+  if (subcommand === "help") {
+    console.log(helpText);
+    return 0;
+  }
+
+  if (subcommand === "list") {
+    const response = await sendServerJsonRequest<{ projects: ServerProject[] }>("GET", "/api/projects", args);
+    if (args.json) {
+      printJson(response);
+    } else {
+      printServerProjects(response.projects);
+    }
+    return 0;
+  }
+
+  if (subcommand === "query") {
+    const projectId = requirePositional(args, 1, "<project-id>");
+    const response = await sendServerJsonRequest<{
+      ok: true;
+      etag: string;
+      result: ReturnType<typeof queryArchive>;
+    }>("GET", `/api/projects/${encodeURIComponent(projectId)}/query?${serverQueryParams(args)}`, args);
+    if (args.json) {
+      printJson(response);
+    } else {
+      printQueryResult(response.result, false);
+      console.log(`etag: ${response.etag}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "patch") {
+    const projectId = requirePositional(args, 1, "<project-id>");
+    const patchFile = requirePositional(args, 2, "<ops.json>");
+    const patch = parsePatch(await readFile(patchFile, "utf8"));
+    const response = await sendServerJsonRequest<{
+      ok: true;
+      etag: string;
+      changed: string[];
+      warnings: string[];
+    }>("POST", `/api/projects/${encodeURIComponent(projectId)}/patch`, args, patch, args.etag);
+    if (args.json) {
+      printJson(response);
+    } else {
+      console.log(`changed: ${response.changed.length}`);
+      console.log(`etag: ${response.etag}`);
+      for (const warning of response.warnings) {
+        console.log(`WARNING ${warning}`);
+      }
+    }
+    return 0;
+  }
+
+  if (subcommand === "export") {
+    const projectId = requirePositional(args, 1, "<project-id>");
+    const format = requireExportFormat(args.format);
+    const params = new URLSearchParams({ format });
+    if (args.root !== undefined) {
+      params.set("root", args.root);
+    }
+    const response = await sendServerJsonRequest<{
+      ok: true;
+      etag: string;
+      format: ExportFormat;
+      content: string;
+    }>("GET", `/api/projects/${encodeURIComponent(projectId)}/export?${params}`, args);
+    if (args.json) {
+      await writeTextOrStdout(`${JSON.stringify(response, null, 2)}\n`, args.output);
+    } else {
+      await writeTextOrStdout(
+        response.content.endsWith("\n") ? response.content : `${response.content}\n`,
+        args.output,
+      );
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown server subcommand: ${subcommand}`);
+}
+
+function printServerProjects(projects: ServerProject[]): void {
+  for (const project of projects) {
+    const lock = project.lock ? ` locked-by=${project.lock.clientName || project.lock.clientId}` : "";
+    const size = typeof project.size === "number" ? ` size=${project.size}` : "";
+    const updatedAt = project.updatedAt ? ` updated=${project.updatedAt}` : "";
+    console.log(`${project.id} ${project.name}${size}${updatedAt}${lock}`);
+  }
+  console.log(`total: ${projects.length}`);
+}
+
+function serverQueryParams(args: ParsedArgs): URLSearchParams {
+  const query = buildQuery(args);
+  const params = new URLSearchParams();
+  params.set("kind", query.kind ?? "all");
+  if (query.text !== undefined) {
+    params.set("text", query.text);
+  }
+  if (query.id !== undefined) {
+    params.set("id", query.id);
+  }
+  if (query.section !== undefined) {
+    params.set("section", query.section ?? "null");
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.includeUnsupported) {
+    params.set("includeUnsupported", "true");
+  }
+  return params;
+}
+
+async function sendServerJsonRequest<T>(
+  method: string,
+  pathAndQuery: string,
+  args: ParsedArgs,
+  body?: unknown,
+  ifMatch?: string,
+): Promise<T> {
+  const url = new URL(pathAndQuery, `${serverBaseUrl(args)}/`);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "X-Project-Graph-Client": "project-graph-cli",
+    ...serverAuthHeaders(args),
+  };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (ifMatch !== undefined) {
+    headers["If-Match"] = ifMatch;
+  }
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    const record = asRecord(data);
+    const code = typeof record.code === "string" ? ` ${record.code}` : "";
+    const message = typeof record.error === "string" ? record.error : response.statusText;
+    throw new Error(`Project Graph server ${response.status}${code}: ${message}`);
+  }
+  return data as T;
+}
+
+function serverBaseUrl(args: ParsedArgs): string {
+  const value = args.serverUrl ?? process.env.PROJECT_GRAPH_SERVER_URL ?? "http://127.0.0.1:37820";
+  const parsed = new URL(value);
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function serverAuthHeaders(args: ParsedArgs): Record<string, string> {
+  const user = args.serverUser ?? process.env.PROJECT_GRAPH_SERVER_USER;
+  const password = args.serverPassword ?? process.env.PROJECT_GRAPH_SERVER_PASSWORD;
+  if (!user && !password) {
+    return {};
+  }
+  if (!user || !password) {
+    throw new Error("Server authentication requires both user and password.");
+  }
+  return {
+    Authorization: `Basic ${Buffer.from(`${user}:${password}`, "utf8").toString("base64")}`,
+  };
 }
 
 interface LiveSession {

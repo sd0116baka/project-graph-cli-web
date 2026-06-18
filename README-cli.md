@@ -82,6 +82,33 @@ project-graph schema ops
 project-graph schema ops -o .\project-graph-ops.schema.json
 ```
 
+## Web Backend Editing
+
+`server` commands target a Project Graph Web backend. By default the CLI connects to `http://127.0.0.1:37820`.
+
+```powershell
+project-graph server list --json
+project-graph server query <project-id> --kind node --text Review --json
+project-graph server patch <project-id> .\ops.json --etag <etag-from-query> --json
+project-graph server export <project-id> --format markdown -o .\current.md
+```
+
+For authenticated Web servers, pass credentials explicitly:
+
+```powershell
+project-graph server list --url http://10.0.0.5:37820 --user pg --password <password> --json
+```
+
+Agent runners can also use environment variables instead of command-line credentials:
+
+```powershell
+$env:PROJECT_GRAPH_SERVER_URL = "http://10.0.0.5:37820"
+$env:PROJECT_GRAPH_SERVER_USER = "pg"
+$env:PROJECT_GRAPH_SERVER_PASSWORD = "<password>"
+```
+
+Web backend patches use `ETag` concurrency through `--etag` / `--if-match`. Numeric `baseRevision` is reserved for live GUI editing.
+
 ## Live GUI Editing
 
 Start the app with live mode enabled. The GUI writes a local session registry, and the CLI discovers it automatically.

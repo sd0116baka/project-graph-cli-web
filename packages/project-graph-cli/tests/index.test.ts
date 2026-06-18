@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer, type IncomingHttpHeaders, type Server as HttpServer } from "node:http";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,6 +11,7 @@ import { main } from "../src/index";
 
 const tempDirs: string[] = [];
 const servers: Server[] = [];
+const httpServers: HttpServer[] = [];
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "project-graph-cli-test-"));
@@ -86,10 +88,63 @@ async function startLiveServer(
   return { port: address.port, requests };
 }
 
+interface HttpRequestRecord {
+  method: string;
+  url: string;
+  headers: IncomingHttpHeaders;
+  body: string;
+}
+
+async function startHttpServer(
+  handler: (request: HttpRequestRecord) => { status?: number; headers?: Record<string, string>; body?: unknown },
+): Promise<{ port: number; requests: HttpRequestRecord[] }> {
+  const requests: HttpRequestRecord[] = [];
+  const server = createHttpServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk.toString();
+    }
+    const record: HttpRequestRecord = {
+      method: req.method ?? "GET",
+      url: req.url ?? "/",
+      headers: req.headers,
+      body,
+    };
+    requests.push(record);
+    const response = handler(record);
+    for (const [key, value] of Object.entries(response.headers ?? {})) {
+      res.setHeader(key, value);
+    }
+    const responseBody = typeof response.body === "string" ? response.body : JSON.stringify(response.body ?? {});
+    res.writeHead(response.status ?? 200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(responseBody),
+    });
+    res.end(responseBody);
+  });
+  httpServers.push(server);
+  await new Promise<void>((resolvePromise) => {
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Cannot resolve fake HTTP server address.");
+  }
+  return { port: address.port, requests };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   await Promise.all(
     servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolvePromise, reject) => {
+          server.close((error) => (error ? reject(error) : resolvePromise()));
+        }),
+    ),
+  );
+  await Promise.all(
+    httpServers.splice(0).map(
       (server) =>
         new Promise<void>((resolvePromise, reject) => {
           server.close((error) => (error ? reject(error) : resolvePromise()));
@@ -347,5 +402,102 @@ describe("@graphif/project-graph-cli", () => {
       { format: "pgjson", document: "file:///graph.prg" },
       { format: "pgjson", document: "file:///graph.prg" },
     ]);
+  });
+
+  it("sends list, query, patch, and export requests to a Web backend", async () => {
+    const dir = await createTempDir();
+    const patchFile = join(dir, "ops.json");
+    const outputFile = join(dir, "server-export.md");
+    await writeFile(patchFile, JSON.stringify([{ op: "rename_node", id: "node-a", text: "Alpha" }]), "utf8");
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/projects") {
+        return {
+          body: {
+            projects: [{ id: "project-a", name: "Project A", size: 128, updatedAt: "2026-06-18T00:00:00.000Z" }],
+          },
+        };
+      }
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/query") {
+        expect(url.searchParams.get("kind")).toBe("node");
+        expect(url.searchParams.get("text")).toBe("Alpha");
+        return {
+          body: {
+            ok: true,
+            etag: '"etag-a"',
+            result: { total: 1, items: [{ kind: "node", id: "node-a", type: "text", text: "Alpha" }] },
+          },
+        };
+      }
+      if (request.method === "POST" && url.pathname === "/api/projects/project-a/patch") {
+        expect(request.headers["if-match"]).toBe('"etag-a"');
+        expect(JSON.parse(request.body)).toMatchObject({ ops: [{ op: "rename_node", id: "node-a" }] });
+        return { body: { ok: true, etag: '"etag-b"', changed: ["node-a"], warnings: [] } };
+      }
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/export") {
+        expect(url.searchParams.get("format")).toBe("markdown");
+        return { body: { ok: true, etag: '"etag-b"', format: "markdown", content: "# Alpha\n" } };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+
+    const listResult = await runCli(["server", "list", "--url", url, "--user", "pg", "--password", "secret", "--json"]);
+    const queryResult = await runCli([
+      "server",
+      "query",
+      "project-a",
+      "--url",
+      url,
+      "--user",
+      "pg",
+      "--password",
+      "secret",
+      "--kind",
+      "node",
+      "--text",
+      "Alpha",
+      "--json",
+    ]);
+    const patchResult = await runCli([
+      "server",
+      "patch",
+      "project-a",
+      patchFile,
+      "--url",
+      url,
+      "--user",
+      "pg",
+      "--password",
+      "secret",
+      "--etag",
+      '"etag-a"',
+      "--json",
+    ]);
+    const exportResult = await runCli([
+      "server",
+      "export",
+      "project-a",
+      "--url",
+      url,
+      "--user",
+      "pg",
+      "--password",
+      "secret",
+      "--format",
+      "markdown",
+      "-o",
+      outputFile,
+    ]);
+
+    expect(listResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(listResult.stdout)).toMatchObject({ projects: [{ id: "project-a" }] });
+    expect(queryResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(queryResult.stdout)).toMatchObject({ etag: '"etag-a"', result: { total: 1 } });
+    expect(patchResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(patchResult.stdout)).toMatchObject({ etag: '"etag-b"', changed: ["node-a"] });
+    expect(exportResult).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(await readFile(outputFile, "utf8")).toBe("# Alpha\n");
+    expect(server.requests.every((request) => request.headers.authorization === "Basic cGc6c2VjcmV0")).toBe(true);
   });
 });
