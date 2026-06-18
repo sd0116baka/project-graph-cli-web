@@ -110,10 +110,10 @@ describe("@graphif/project-graph-cli", () => {
     await writeFile(markdown, "# Intake\n\n## Review\n", "utf8");
     await writeFile(
       patch,
-      JSON.stringify([
+      `\uFEFF${JSON.stringify([
         { op: "add_text_node", id: "ship", text: "Ship", position: { x: 520, y: 0 } },
         { op: "connect", id: "review-ship", source: "Review", target: "ship", text: "ready" },
-      ]),
+      ])}`,
       "utf8",
     );
 

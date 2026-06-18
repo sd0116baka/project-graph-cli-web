@@ -217,6 +217,19 @@ describe("@graphif/project-graph-core", () => {
     ).toThrow("Invalid Project Graph patch payload");
   });
 
+  it("rejects edge ids for rectangular layout operations", () => {
+    expect(() =>
+      applyOperationsToArchive(createArchive(), {
+        ops: [{ op: "move_node", id: "edge-a-b", position: { x: 10, y: 20 } }],
+      }),
+    ).toThrow("does not have a rectangular layout");
+    expect(() =>
+      applyOperationsToArchive(createArchive(), {
+        ops: [{ op: "resize_node", id: "edge-a-b", size: { width: 100, height: 80 } }],
+      }),
+    ).toThrow("does not have a rectangular layout");
+  });
+
   it("deletes objects without corrupting surviving references", () => {
     const archive = createArchive();
     const unusedNode = structuredClone(archive.stage[1]) as Record<string, unknown>;

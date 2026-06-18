@@ -1,3 +1,4 @@
+import { FileSystemProviderFile } from "@/core/fileSystemProvider/FileSystemProviderFile";
 import { loadAllServicesAfterInit, loadAllServicesBeforeInit } from "@/core/loadAllServices";
 import { Project, ProjectState } from "@/core/Project";
 import { TabFactory } from "@/core/TabFactory";
@@ -33,6 +34,7 @@ interface LiveRequest {
 }
 
 type CoreArchive = Parameters<typeof applyOperationsToArchive>[0];
+type CoreAttachment = CoreArchive["attachments"] extends Map<string, infer Attachment> ? Attachment : never;
 
 interface LiveDocument {
   id: string;
@@ -135,11 +137,19 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
     if (patch.baseRevision !== undefined && patch.baseRevision !== revision) {
       throw new Error(`Live patch revision mismatch: expected ${patch.baseRevision}, current ${revision}.`);
     }
+    const previousState = project.projectState;
     const result = applyOperationsToArchive(archive, patch);
     applyArchiveToProject(project, result.archive);
-    const nextRevision = await setProjectRevision(project, revision + 1);
     const warnings = [...result.warnings];
-    const saveResult = await saveProjectIfRequested(project, save, warnings);
+    let saveResult: { saved: boolean; uri: string | null };
+    try {
+      saveResult = await saveProjectIfRequested(project, save, warnings);
+    } catch (error) {
+      applyArchiveToProject(project, archive, { recordHistory: false, projectState: previousState });
+      await setProjectRevision(project, revision);
+      throw error;
+    }
+    const nextRevision = await setProjectRevision(project, revision + 1);
     return {
       changed: result.changed,
       warnings,
@@ -238,12 +248,10 @@ async function openAndRegisterProject(uri: URI, documentId: string): Promise<Pro
 }
 
 async function loadProjectFromUri(uri: URI): Promise<Project> {
-  const dummyProject = new Project(uri);
-  loadAllServicesBeforeInit(dummyProject);
   let tab: Awaited<ReturnType<typeof TabFactory.create>> | undefined;
 
   try {
-    tab = await TabFactory.create(uri, dummyProject.fs);
+    tab = await TabFactory.create(uri, new FileSystemProviderFile());
     if (!(tab instanceof Project)) {
       throw new Error(`Live open_document only supports Project Graph documents: ${uri.toString()}`);
     }
@@ -258,8 +266,6 @@ async function loadProjectFromUri(uri: URI): Promise<Project> {
   } catch (error) {
     await tab?.dispose();
     throw error;
-  } finally {
-    await dummyProject.dispose();
   }
 }
 
@@ -303,16 +309,30 @@ async function projectToArchive(project: Project): Promise<CoreArchive> {
   };
 }
 
-function applyArchiveToProject(project: Project, archive: CoreArchive): void {
+function applyArchiveToProject(
+  project: Project,
+  archive: CoreArchive,
+  options: { recordHistory?: boolean; projectState?: ProjectState } = {},
+): void {
   project.stage = deserialize(archive.stage, project);
   project.tags = archive.tags;
   project.references = archive.references;
   project.metadata = archive.metadata;
   project.readme = archive.readme;
+  project.attachments = new Map(
+    [...archive.attachments.entries()].map(([id, attachment]) => [id, blobFromAttachment(attachment)]),
+  );
   project.stageManager.updateReferences();
-  project.historyManager.recordStep();
-  project.projectState = ProjectState.Unsaved;
+  if (options.recordHistory !== false) {
+    project.historyManager.recordStep();
+  }
+  project.projectState = options.projectState ?? ProjectState.Unsaved;
   project.loop();
+}
+
+function blobFromAttachment(attachment: CoreAttachment): Blob {
+  const mimeType = mime.getType(attachment.extension) ?? "application/octet-stream";
+  return new Blob([new Uint8Array(attachment.data)], { type: mimeType });
 }
 
 async function saveProjectIfRequested(
@@ -482,29 +502,45 @@ function normalizePatch(params: unknown): ProjectGraphPatch {
 
 function normalizeQuery(params: Record<string, unknown>): ProjectGraphQuery {
   const query: ProjectGraphQuery = {};
-  if (
-    params.kind === "all" ||
-    params.kind === "node" ||
-    params.kind === "section" ||
-    params.kind === "edge" ||
-    params.kind === "attachment" ||
-    params.kind === "unsupported"
-  ) {
+  if (params.kind !== undefined) {
+    if (
+      params.kind !== "all" &&
+      params.kind !== "node" &&
+      params.kind !== "section" &&
+      params.kind !== "edge" &&
+      params.kind !== "attachment" &&
+      params.kind !== "unsupported"
+    ) {
+      throw new Error("Invalid live query kind. Expected all, node, section, edge, attachment, or unsupported.");
+    }
     query.kind = params.kind;
   }
-  if (typeof params.id === "string") {
+  if (params.id !== undefined && typeof params.id !== "string") {
+    throw new Error("Invalid live query id. Expected a string.");
+  } else if (typeof params.id === "string") {
     query.id = params.id;
   }
-  if (typeof params.text === "string") {
+  if (params.text !== undefined && typeof params.text !== "string") {
+    throw new Error("Invalid live query text. Expected a string.");
+  } else if (typeof params.text === "string") {
     query.text = params.text;
   }
-  if (typeof params.section === "string" || params.section === null) {
+  if (params.section !== undefined && typeof params.section !== "string" && params.section !== null) {
+    throw new Error("Invalid live query section. Expected a string or null.");
+  } else if (typeof params.section === "string" || params.section === null) {
     query.section = params.section;
   }
-  if (typeof params.limit === "number" && Number.isInteger(params.limit) && params.limit > 0) {
+  if (
+    params.limit !== undefined &&
+    (typeof params.limit !== "number" || !Number.isInteger(params.limit) || params.limit < 1)
+  ) {
+    throw new Error("Invalid live query limit. Expected a positive integer.");
+  } else if (typeof params.limit === "number") {
     query.limit = params.limit;
   }
-  if (params.includeUnsupported === true) {
+  if (params.includeUnsupported !== undefined && typeof params.includeUnsupported !== "boolean") {
+    throw new Error("Invalid live query includeUnsupported. Expected a boolean.");
+  } else if (params.includeUnsupported === true) {
     query.includeUnsupported = true;
   }
   return query;

@@ -470,7 +470,7 @@ function inferImportFormat(file: string): ImportFormat | undefined {
 }
 
 function parsePatch(content: string): ProjectGraphPatch {
-  const parsed = JSON.parse(content) as unknown;
+  const parsed = JSON.parse(stripJsonBom(content)) as unknown;
   assertValidProjectGraphPatchPayload(parsed);
   if (Array.isArray(parsed)) {
     return { ops: parsed as ProjectGraphPatch["ops"] };
@@ -479,6 +479,10 @@ function parsePatch(content: string): ProjectGraphPatch {
     return parsed as ProjectGraphPatch;
   }
   throw new Error("Patch file must be an operation array or an object with an ops array.");
+}
+
+function stripJsonBom(content: string): string {
+  return content.replace(/^\uFEFF/, "");
 }
 
 async function writeTextOrStdout(content: string, output: string | undefined): Promise<void> {

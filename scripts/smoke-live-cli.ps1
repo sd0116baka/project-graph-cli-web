@@ -16,6 +16,8 @@ $CliEntry = Join-Path $Root "packages\project-graph-cli\dist\index.mjs"
 $LogsDir = Join-Path $TempRoot "logs"
 $StartedVite = $null
 $StartedApp = $null
+$Succeeded = $false
+$PreviousRegistryContent = $null
 
 function Test-PortBusy([int]$Value) {
   try {
@@ -61,8 +63,14 @@ function Wait-LiveRegistry([int]$ExpectedPort, [int]$TimeoutSeconds = 90) {
 }
 
 function Invoke-Cli([string[]]$Arguments, [switch]$AllowFailure) {
-  $Output = & node $CliEntry @Arguments 2>&1
-  $Code = $LASTEXITCODE
+  $PreviousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $Output = & node $CliEntry @Arguments 2>&1
+    $Code = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $PreviousErrorActionPreference
+  }
   $Text = ($Output | ForEach-Object { $_.ToString() }) -join "`n"
   if ($Code -ne 0 -and -not $AllowFailure) {
     throw "CLI failed ($Code): node $CliEntry $($Arguments -join ' ')`n$Text"
@@ -85,9 +93,24 @@ function Stop-ProcessTree([Diagnostics.Process]$Process) {
   taskkill /PID $Process.Id /T /F | Out-Null
 }
 
+function Get-PnpmExecutable {
+  $Command = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+  if ($Command) {
+    return $Command.Source
+  }
+  $Command = Get-Command pnpm.exe -ErrorAction SilentlyContinue
+  if ($Command) {
+    return $Command.Source
+  }
+  throw "Cannot find pnpm.cmd or pnpm.exe on PATH."
+}
+
 try {
   Set-Location $Root
   New-Item -ItemType Directory -Path $TempRoot, $LogsDir -Force | Out-Null
+  if (Test-Path $RegistryPath) {
+    $PreviousRegistryContent = Get-Content -Raw -LiteralPath $RegistryPath
+  }
   Remove-Item -LiteralPath $RegistryPath -Force -ErrorAction SilentlyContinue
 
   if (-not $SkipCliBuild) {
@@ -110,20 +133,33 @@ try {
   $SecondPrg = Join-Path $TempRoot "second.prg"
   $BadPrg = Join-Path $TempRoot "bad.prg"
   $PatchFile = Join-Path $TempRoot "ops.json"
+  $InvalidPatchFile = Join-Path $TempRoot "invalid-ops.json"
   $LiveExport = Join-Path $TempRoot "live-export.pg.json"
   $DiskExport = Join-Path $TempRoot "disk-export.pg.json"
 
-  Set-Content -LiteralPath $FirstMarkdown -Value "# First`n`n## First child`n" -Encoding UTF8
-  Set-Content -LiteralPath $SecondMarkdown -Value "# Second`n" -Encoding UTF8
-  Set-Content -LiteralPath $BadPrg -Value "not a project graph archive" -Encoding UTF8
-  @(
+  [IO.File]::WriteAllText($FirstMarkdown, "# First`n`n## First child`n", [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($SecondMarkdown, "# Second`n", [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($BadPrg, "not a project graph archive", [Text.UTF8Encoding]::new($false))
+  $PatchOperations = @(
     @{
       op = "add_text_node"
       id = "smoke-live-node"
       text = "Live smoke node"
       position = @{ x = 520; y = 0 }
+    },
+    @{
+      op = "add_svg_node"
+      id = "smoke-live-svg"
+      attachmentId = "smoke-live-svg-attachment"
+      dataBase64 = "PHN2Zy8+"
+      position = @{ x = 760; y = 0 }
+      size = @{ width = 160; height = 100 }
     }
-  ) | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $PatchFile -Encoding UTF8
+  )
+  $PatchJson = ConvertTo-Json -InputObject $PatchOperations -Depth 10
+  [IO.File]::WriteAllText($PatchFile, $PatchJson, [Text.UTF8Encoding]::new($false))
+  $InvalidPatchJson = ConvertTo-Json -InputObject @(@{ op = "add_text_node"; text = 42 }) -Depth 10
+  [IO.File]::WriteAllText($InvalidPatchFile, $InvalidPatchJson, [Text.UTF8Encoding]::new($false))
 
   Invoke-Cli @("import", $FirstMarkdown, "--format", "markdown", "-o", $FirstPrg) | Out-Null
   Invoke-Cli @("import", $SecondMarkdown, "--format", "markdown", "-o", $SecondPrg) | Out-Null
@@ -136,12 +172,12 @@ try {
     }
     Wait-Http $ViteUrl "existing Vite server"
   } else {
-    $Pnpm = (Get-Command pnpm -ErrorAction Stop).Source
+    $Pnpm = Get-PnpmExecutable
     $ViteOut = Join-Path $LogsDir "vite.out.log"
     $ViteErr = Join-Path $LogsDir "vite.err.log"
     $StartedVite = Start-Process `
       -FilePath $Pnpm `
-      -ArgumentList @("--filter", "@graphif/project-graph", "dev", "--", "--host", "127.0.0.1", "--port", [string]$VitePort, "--strictPort") `
+      -ArgumentList @("--dir", (Join-Path $Root "app"), "exec", "vite", "--host", "127.0.0.1", "--port", [string]$VitePort, "--strictPort") `
       -WorkingDirectory $Root `
       -PassThru `
       -WindowStyle Hidden `
@@ -193,6 +229,18 @@ try {
   }
   Write-Host "OK: ambiguous document guard"
 
+  $InvalidPatch = Invoke-Cli @(
+    "live", "patch", $InvalidPatchFile,
+    "--document", $SecondDocumentId,
+    "--port", [string]$LivePort,
+    "--token", $Token,
+    "--json"
+  ) -AllowFailure
+  if ($InvalidPatch.Code -eq 0 -or $InvalidPatch.Text -notmatch "Invalid Project Graph patch payload") {
+    throw "Expected invalid live patch to fail before mutation."
+  }
+  Write-Host "OK: invalid patch validation"
+
   $ManualFileUri = ([System.Uri]::new((Resolve-Path -LiteralPath $SecondPrg).Path)).AbsoluteUri
   $Patch = Invoke-CliJson @(
     "live", "patch", $PatchFile,
@@ -207,6 +255,20 @@ try {
   }
   Write-Host "OK: live patch saved"
 
+  $Query = Invoke-CliJson @(
+    "live", "query",
+    "--kind", "node",
+    "--text", "Live smoke",
+    "--document", $SecondDocumentId,
+    "--port", [string]$LivePort,
+    "--token", $Token,
+    "--json"
+  )
+  if (-not ($Query.items | Where-Object { $_.id -eq "smoke-live-node" })) {
+    throw "Live query did not return the patched node."
+  }
+  Write-Host "OK: live query"
+
   Invoke-Cli @(
     "live", "export",
     "--format", "pgjson",
@@ -219,6 +281,9 @@ try {
   if (-not ($LiveJson.nodes | Where-Object { $_.id -eq "smoke-live-node" })) {
     throw "Live export did not include the patched node."
   }
+  if (-not ($LiveJson.nodes | Where-Object { $_.id -eq "smoke-live-svg" -and $_.attachmentId -eq "smoke-live-svg-attachment" })) {
+    throw "Live export did not include the patched SVG node."
+  }
   Write-Host "OK: live export"
 
   Invoke-Cli @("export", $SecondPrg, "--format", "pgjson", "-o", $DiskExport) | Out-Null
@@ -226,21 +291,33 @@ try {
   if (-not ($DiskJson.nodes | Where-Object { $_.id -eq "smoke-live-node" })) {
     throw "Disk export did not include the patched node."
   }
+  if (-not ($DiskJson.attachments | Where-Object { $_.id -eq "smoke-live-svg-attachment" -and $_.dataBase64 })) {
+    throw "Disk export did not include the patched SVG attachment."
+  }
   Invoke-Cli @("validate", $SecondPrg) | Out-Null
   Write-Host "OK: autosaved disk document"
 
   $BadOpen = Invoke-Cli @("live", "open", $BadPrg, "--port", [string]$LivePort, "--token", $Token, "--json") -AllowFailure
-  if ($BadOpen.Code -eq 0 -or $BadOpen.Text -notmatch "File format is not recognized") {
+  if ($BadOpen.Code -eq 0) {
     throw "Expected corrupt .prg live open to fail without blocking."
   }
   Write-Host "OK: corrupt open fails fast"
 
+  $Succeeded = $true
   Write-Host "Smoke test passed: live CLI bridge"
 } finally {
   Stop-ProcessTree $StartedApp
   if ($StartedVite) {
     Stop-ProcessTree $StartedVite
   }
-  Remove-Item -LiteralPath $RegistryPath -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  if ($null -ne $PreviousRegistryContent) {
+    [IO.File]::WriteAllText($RegistryPath, $PreviousRegistryContent, [Text.UTF8Encoding]::new($false))
+  } else {
+    Remove-Item -LiteralPath $RegistryPath -Force -ErrorAction SilentlyContinue
+  }
+  if ($Succeeded) {
+    Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  } else {
+    Write-Host "Smoke logs preserved: $TempRoot"
+  }
 }

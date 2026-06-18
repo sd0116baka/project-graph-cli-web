@@ -1485,14 +1485,14 @@ function applyOperation(
       return;
     }
     case "move_node": {
-      const object = requireRecord(findStageObjectById(archive, op.id), op.id);
+      const object = requireRectangularObjectRecord(archive, op.id);
       const rect = getStageObjectRectangle(object);
       setStageObjectRectangle(object, op.position.x, op.position.y, rect.width, rect.height);
       changed.add(op.id);
       return;
     }
     case "resize_node": {
-      const object = requireRecord(findStageObjectById(archive, op.id), op.id);
+      const object = requireRectangularObjectRecord(archive, op.id);
       const rect = getStageObjectRectangle(object);
       setStageObjectRectangle(object, rect.x, rect.y, op.size.width, op.size.height);
       changed.add(op.id);
