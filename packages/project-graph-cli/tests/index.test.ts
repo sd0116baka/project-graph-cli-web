@@ -112,14 +112,17 @@ async function startHttpServer(
     };
     requests.push(record);
     const response = handler(record);
-    for (const [key, value] of Object.entries(response.headers ?? {})) {
-      res.setHeader(key, value);
-    }
-    const responseBody = typeof response.body === "string" ? response.body : JSON.stringify(response.body ?? {});
-    res.writeHead(response.status ?? 200, {
-      "Content-Type": "application/json; charset=utf-8",
+    const responseBody = Buffer.isBuffer(response.body)
+      ? response.body
+      : typeof response.body === "string"
+        ? response.body
+        : JSON.stringify(response.body ?? {});
+    const headers = {
+      "Content-Type": Buffer.isBuffer(response.body) ? "application/octet-stream" : "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(responseBody),
-    });
+      ...response.headers,
+    };
+    res.writeHead(response.status ?? 200, headers);
     res.end(responseBody);
   });
   httpServers.push(server);
@@ -489,6 +492,20 @@ describe("@graphif/project-graph-cli", () => {
       "-o",
       outputFile,
     ]);
+    const jsonExportResult = await runCli([
+      "server",
+      "export",
+      "project-a",
+      "--url",
+      url,
+      "--user",
+      "pg",
+      "--password",
+      "secret",
+      "--format",
+      "markdown",
+      "--json",
+    ]);
 
     expect(listResult).toMatchObject({ code: 0, stderr: "" });
     expect(JSON.parse(listResult.stdout)).toMatchObject({ projects: [{ id: "project-a" }] });
@@ -498,6 +515,161 @@ describe("@graphif/project-graph-cli", () => {
     expect(JSON.parse(patchResult.stdout)).toMatchObject({ etag: '"etag-b"', changed: ["node-a"] });
     expect(exportResult).toMatchObject({ code: 0, stdout: "", stderr: "" });
     expect(await readFile(outputFile, "utf8")).toBe("# Alpha\n");
+    expect(jsonExportResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(jsonExportResult.stdout)).toMatchObject({
+      ok: true,
+      etag: '"etag-b"',
+      format: "markdown",
+      content: "# Alpha\n",
+    });
     expect(server.requests.every((request) => request.headers.authorization === "Basic cGc6c2VjcmV0")).toBe(true);
+  });
+
+  it("validates a Web backend project as JSON", async () => {
+    const dir = await createTempDir();
+    const markdown = join(dir, "outline.md");
+    const projectFile = join(dir, "server-project.prg");
+    await writeFile(markdown, "# Intake\n\n## Review\n", "utf8");
+    expect((await runCli(["import", markdown, "--format", "markdown", "-o", projectFile])).code).toBe(0);
+    const projectContent = await readFile(projectFile);
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/blob") {
+        return {
+          headers: {
+            "Content-Type": "application/vnd.project-graph",
+            ETag: '"etag-validate"',
+          },
+          body: projectContent,
+        };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+
+    const result = await runCli([
+      "server",
+      "validate",
+      "project-a",
+      "--url",
+      `http://127.0.0.1:${server.port}`,
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, etag: '"etag-validate"', issues: [] });
+  });
+
+  it("prints structured JSON for Web backend CLI argument errors", async () => {
+    const result = await runCli(["server", "list", "--bad", "--json"]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: 0,
+      code: "invalid_cli_arguments",
+      error: "Unknown option: --bad",
+      retry: { action: "fix_request", retryable: false },
+    });
+  });
+
+  it("prints structured JSON when the Web backend is unreachable", async () => {
+    const closedServer = createHttpServer();
+    await new Promise<void>((resolvePromise) => {
+      closedServer.listen(0, "127.0.0.1", resolvePromise);
+    });
+    const address = closedServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Cannot resolve temporary closed server address.");
+    }
+    await new Promise<void>((resolvePromise, reject) => {
+      closedServer.close((error) => (error ? reject(error) : resolvePromise()));
+    });
+
+    const result = await runCli(["server", "list", "--url", `http://127.0.0.1:${address.port}`, "--json"]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: 0,
+      code: "server_unreachable",
+      retry: { action: "retry_later", retryable: true },
+    });
+  });
+
+  it("prints structured JSON when Web backend validation receives an invalid project blob", async () => {
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/projects/project-a/blob") {
+        return {
+          headers: {
+            "Content-Type": "application/vnd.project-graph",
+            ETag: '"etag-invalid"',
+          },
+          body: Buffer.from("not-a-prg"),
+        };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+
+    const result = await runCli([
+      "server",
+      "validate",
+      "project-a",
+      "--url",
+      `http://127.0.0.1:${server.port}`,
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: 0,
+      code: "invalid_project_blob",
+      details: { etag: '"etag-invalid"' },
+      retry: { action: "inspect_error", retryable: false },
+    });
+  });
+
+  it("prints structured JSON for Web backend errors", async () => {
+    const dir = await createTempDir();
+    const patchFile = join(dir, "ops.json");
+    await writeFile(patchFile, JSON.stringify([{ op: "rename_node", id: "node-a", text: "Alpha" }]), "utf8");
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "POST" && url.pathname === "/api/projects/project-a/patch") {
+        return {
+          status: 412,
+          body: {
+            ok: false,
+            code: "etag_mismatch",
+            error: "Project revision does not match",
+            details: { currentEtag: '"etag-b"' },
+          },
+        };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+
+    const result = await runCli([
+      "server",
+      "patch",
+      "project-a",
+      patchFile,
+      "--url",
+      `http://127.0.0.1:${server.port}`,
+      "--etag",
+      '"etag-a"',
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: 412,
+      code: "etag_mismatch",
+      error: "Project revision does not match",
+      details: { currentEtag: '"etag-b"' },
+      retry: { action: "refresh_etag", retryable: true },
+    });
   });
 });

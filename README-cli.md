@@ -90,6 +90,7 @@ project-graph schema ops -o .\project-graph-ops.schema.json
 project-graph server list --json
 project-graph server query <project-id> --kind node --text Review --json
 project-graph server patch <project-id> .\ops.json --etag <etag-from-query> --json
+project-graph server validate <project-id> --json
 project-graph server export <project-id> --format markdown -o .\current.md
 ```
 
@@ -108,6 +109,93 @@ $env:PROJECT_GRAPH_SERVER_PASSWORD = "<password>"
 ```
 
 Web backend patches use `ETag` concurrency through `--etag` / `--if-match`. Numeric `baseRevision` is reserved for live GUI editing.
+
+### Agent Operation Schema
+
+Agents should fetch the patch operation schema before generating write payloads:
+
+```powershell
+project-graph schema ops -o .\project-graph-ops.schema.json
+```
+
+`project-graph server patch` accepts the same operation array or `{ "ops": [...] }` object as offline `project-graph patch`. A minimal Web patch payload looks like:
+
+```json
+[
+  {
+    "op": "rename_node",
+    "id": "review",
+    "text": "Review"
+  }
+]
+```
+
+### Recommended Agent Flow
+
+Use `--json` for every agent-facing command. The stable loop is:
+
+```powershell
+project-graph server list --json
+project-graph server query <project-id> --kind node --text Review --json
+project-graph server patch <project-id> .\ops.json --etag <etag-from-query> --json
+project-graph server validate <project-id> --json
+project-graph server export <project-id> --format markdown --json
+```
+
+The `query`, `patch`, `validate`, and `export` responses include an `etag` when the server has a project revision. Pass the latest `etag` to `server patch --etag` to avoid overwriting another browser or agent. If validation is not needed for the workflow, export the project after patching and inspect the returned `content`.
+
+### Web API Equivalents
+
+The CLI is the preferred agent entry point, but the Web backend exposes JSON endpoints for direct callers:
+
+```http
+GET /api/projects
+GET /api/projects/<project-id>/query?kind=node&text=Review
+POST /api/projects/<project-id>/patch
+GET /api/projects/<project-id>/export?format=markdown
+GET /api/projects/<project-id>/blob
+```
+
+Authenticated servers use Basic auth with the same user and password accepted by `--user` and `--password`. Patch requests should include the latest revision:
+
+```http
+If-Match: "<etag-from-query-or-export>"
+Content-Type: application/json
+```
+
+The patch body is the operation array or `{ "ops": [...] }` object described by `project-graph schema ops`.
+
+### JSON Error Contract
+
+When `project-graph server ... --json` fails, stdout remains machine-readable and the process exits non-zero:
+
+```json
+{
+  "ok": false,
+  "status": 412,
+  "code": "etag_mismatch",
+  "error": "Project revision does not match",
+  "details": {
+    "currentEtag": "\"new-etag\""
+  },
+  "retry": {
+    "action": "refresh_etag",
+    "retryable": true
+  }
+}
+```
+
+`status` is the HTTP status when the backend responded. It is `0` for local CLI argument errors, unreachable backend connections, or invalid project blobs returned by the backend.
+
+Retry actions are intentionally small:
+
+- `authenticate`: fix credentials, then retry.
+- `refresh_etag`: run `server query` or `server export` again, rebuild the patch if needed, then retry with the new ETag.
+- `wait_for_lock`: another client owns the project lock; wait, ask the user, or retry after the lock expires.
+- `fix_request`: patch/query/options are invalid; fix the payload before retrying.
+- `check_target`: project id or file is missing.
+- `retry_later`: transient server-side failure or backend connection failure.
+- `inspect_error`: unexpected response or invalid project blob; inspect `status`, `code`, and `details`.
 
 ## Live GUI Editing
 

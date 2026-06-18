@@ -17,6 +17,7 @@ import {
 } from "@graphif/project-graph-core";
 import {
   inspectPrgArchive,
+  readPrgData,
   readPrgFile,
   validatePrgArchive,
   writePrgFile,
@@ -85,6 +86,7 @@ Usage:
   project-graph server query <project-id> [--url <url>] [--user <user> --password <password>] [--kind all|node|section|edge|attachment|unsupported] [--text <contains>] [--id <id>] [--section <id|null>] [--limit <n>] [--json]
   project-graph server patch <project-id> <ops.json> [--url <url>] [--user <user> --password <password>] [--etag <etag>] [--json]
   project-graph server export <project-id> --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph server validate <project-id> [--url <url>] [--user <user> --password <password>] [--json]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
   project-graph live open <file.prg|file-uri> [--json] [--port <port> --token <token>]
@@ -113,7 +115,25 @@ Environment:
 `;
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const args = parseArgs(argv);
+  let args: ParsedArgs;
+  try {
+    args = parseArgs(argv);
+  } catch (error) {
+    if (isServerJsonRequest(argv)) {
+      printJson(
+        serverErrorPayload(
+          new ProjectGraphServerError(
+            0,
+            "invalid_cli_arguments",
+            error instanceof Error ? error.message : String(error),
+            undefined,
+          ),
+        ),
+      );
+      return 1;
+    }
+    throw error;
+  }
 
   if (args.command === "help") {
     console.log(helpText);
@@ -386,6 +406,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
+function isServerJsonRequest(argv: string[]): boolean {
+  return argv[0] === "server" && argv.includes("--json");
+}
+
 function printInspection(inspection: PrgInspection): void {
   console.log(`version: ${inspection.version}`);
   console.log(`stage objects: ${inspection.stageObjectCount}`);
@@ -546,6 +570,18 @@ interface ServerProject {
 }
 
 async function handleServerCommand(args: ParsedArgs): Promise<number> {
+  try {
+    return await runServerCommand(args);
+  } catch (error) {
+    if (args.json) {
+      printJson(serverErrorPayload(error));
+      return 1;
+    }
+    throw error;
+  }
+}
+
+async function runServerCommand(args: ParsedArgs): Promise<number> {
   const subcommand = args.positionals[0] ?? "help";
   if (subcommand === "help") {
     console.log(helpText);
@@ -624,7 +660,121 @@ async function handleServerCommand(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
+  if (subcommand === "validate") {
+    const projectId = requirePositional(args, 1, "<project-id>");
+    const response = await sendServerBinaryRequest(`/api/projects/${encodeURIComponent(projectId)}/blob`, args);
+    let archive: Awaited<ReturnType<typeof readPrgData>>;
+    try {
+      archive = await readPrgData(response.content);
+    } catch (error) {
+      throw new ProjectGraphServerError(
+        0,
+        "invalid_project_blob",
+        "Project Graph server returned an invalid .prg blob.",
+        {
+          etag: response.etag,
+          parseError: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+    const report = validatePrgArchive(archive);
+    if (args.json) {
+      printJson({ ...report, etag: response.etag });
+    } else if (report.issues.length === 0) {
+      console.log("OK");
+      if (response.etag) {
+        console.log(`etag: ${response.etag}`);
+      }
+    } else {
+      for (const issue of report.issues) {
+        const path = issue.path ? ` ${issue.path}` : "";
+        console.log(`${issue.severity.toUpperCase()} ${issue.code}${path}: ${issue.message}`);
+      }
+      if (response.etag) {
+        console.log(`etag: ${response.etag}`);
+      }
+    }
+    return report.ok ? 0 : 1;
+  }
+
   throw new Error(`Unknown server subcommand: ${subcommand}`);
+}
+
+interface ServerRetryAdvice {
+  action:
+    | "authenticate"
+    | "refresh_etag"
+    | "wait_for_lock"
+    | "fix_request"
+    | "check_target"
+    | "retry_later"
+    | "inspect_error";
+  retryable: boolean;
+}
+
+class ProjectGraphServerError extends Error {
+  status: number;
+  code: string;
+  details: unknown;
+
+  constructor(status: number, code: string, message: string, details: unknown) {
+    super(message);
+    this.name = "ProjectGraphServerError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function serverErrorPayload(error: unknown): Record<string, unknown> {
+  if (error instanceof ProjectGraphServerError) {
+    const payload: Record<string, unknown> = {
+      ok: false,
+      status: error.status,
+      code: error.code,
+      error: error.message,
+      retry: serverRetryAdvice(error.status, error.code),
+    };
+    if (error.details !== undefined) {
+      payload.details = error.details;
+    }
+    return payload;
+  }
+
+  return {
+    ok: false,
+    code: "cli_error",
+    error: error instanceof Error ? error.message : String(error),
+    retry: serverRetryAdvice(0, "cli_error"),
+  };
+}
+
+function serverRetryAdvice(status: number, code: string): ServerRetryAdvice {
+  if (status === 401 || code === "authentication_required") {
+    return { action: "authenticate", retryable: false };
+  }
+  if (status === 412 || code === "etag_mismatch") {
+    return { action: "refresh_etag", retryable: true };
+  }
+  if (status === 423 || code === "project_locked") {
+    return { action: "wait_for_lock", retryable: true };
+  }
+  if (code === "server_unreachable") {
+    return { action: "retry_later", retryable: true };
+  }
+  if (code === "invalid_server_response" || code === "invalid_project_blob") {
+    return { action: "inspect_error", retryable: false };
+  }
+  if (status === 400 || code.startsWith("invalid_") || code === "base_revision_not_supported" || code === "cli_error") {
+    return { action: "fix_request", retryable: false };
+  }
+  if (status === 404 || code === "not_found" || code === "project_file_not_found") {
+    return { action: "check_target", retryable: false };
+  }
+  if (status >= 500) {
+    return { action: "retry_later", retryable: true };
+  }
+  return { action: "inspect_error", retryable: false };
 }
 
 function printServerProjects(projects: ServerProject[]): void {
@@ -678,20 +828,91 @@ async function sendServerJsonRequest<T>(
   if (ifMatch !== undefined) {
     headers["If-Match"] = ifMatch;
   }
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw serverTransportError(url, error);
+  }
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (error) {
+    throw new ProjectGraphServerError(
+      response.status,
+      "invalid_server_response",
+      "Project Graph server returned invalid JSON.",
+      {
+        body: text.slice(0, 1024),
+        parseError: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
   if (!response.ok) {
     const record = asRecord(data);
-    const code = typeof record.code === "string" ? ` ${record.code}` : "";
+    const code = typeof record.code === "string" ? record.code : "server_error";
     const message = typeof record.error === "string" ? record.error : response.statusText;
-    throw new Error(`Project Graph server ${response.status}${code}: ${message}`);
+    throw new ProjectGraphServerError(response.status, code, message, record.details);
   }
   return data as T;
+}
+
+async function sendServerBinaryRequest(
+  pathAndQuery: string,
+  args: ParsedArgs,
+): Promise<{ content: Buffer; etag?: string }> {
+  const url = new URL(pathAndQuery, `${serverBaseUrl(args)}/`);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/vnd.project-graph,application/json",
+        "X-Project-Graph-Client": "project-graph-cli",
+        ...serverAuthHeaders(args),
+      },
+    });
+  } catch (error) {
+    throw serverTransportError(url, error);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok) {
+    const text = await response.text();
+    let data: unknown;
+    try {
+      data = text && contentType.includes("application/json") ? JSON.parse(text) : {};
+    } catch (error) {
+      throw new ProjectGraphServerError(
+        response.status,
+        "invalid_server_response",
+        "Project Graph server returned invalid JSON.",
+        {
+          body: text.slice(0, 1024),
+          parseError: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+    const record = asRecord(data);
+    const code = typeof record.code === "string" ? record.code : "server_error";
+    const message = typeof record.error === "string" ? record.error : response.statusText;
+    throw new ProjectGraphServerError(response.status, code, message, record.details);
+  }
+  return {
+    content: Buffer.from(await response.arrayBuffer()),
+    etag: response.headers.get("etag") ?? undefined,
+  };
+}
+
+function serverTransportError(url: URL, error: unknown): ProjectGraphServerError {
+  return new ProjectGraphServerError(0, "server_unreachable", "Project Graph server request failed.", {
+    url: url.toString(),
+    cause: error instanceof Error ? error.message : String(error),
+  });
 }
 
 function serverBaseUrl(args: ParsedArgs): string {
