@@ -23,8 +23,12 @@ type TabName =
   | "settings"
   | "linuxRuntime"
   | "keybinds"
+  | "keybindsGlobal"
   | "customization"
+  | "themes"
+  | "quickSettings"
   | "about"
+  | "credits"
   | "extensions"
   | "account"
   | "localAi";

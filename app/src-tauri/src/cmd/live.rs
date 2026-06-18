@@ -54,7 +54,8 @@ pub fn project_graph_live_start(
         return Ok(session);
     }
 
-    let listener = TcpListener::bind(("127.0.0.1", port.unwrap_or(0))).map_err(|e| e.to_string())?;
+    let listener =
+        TcpListener::bind(("127.0.0.1", port.unwrap_or(0))).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = token.unwrap_or_else(generate_token);
     let registry_path = std::env::temp_dir()
@@ -116,14 +117,20 @@ fn handle_stream(
 ) {
     let mut body = String::new();
     if let Err(error) = stream.read_to_string(&mut body) {
-        write_response(&mut stream, json!({ "ok": false, "error": error.to_string() }));
+        write_response(
+            &mut stream,
+            json!({ "ok": false, "error": error.to_string() }),
+        );
         return;
     }
 
     let request = match serde_json::from_str::<LiveRpcRequest>(&body) {
         Ok(request) => request,
         Err(error) => {
-            write_response(&mut stream, json!({ "ok": false, "error": error.to_string() }));
+            write_response(
+                &mut stream,
+                json!({ "ok": false, "error": error.to_string() }),
+            );
             return;
         }
     };

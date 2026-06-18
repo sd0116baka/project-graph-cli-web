@@ -28,7 +28,6 @@ interface DonationData {
 }
 
 // 此列表为2025年的捐赠记录，自2026年起将不再写入源代码，转为云控。
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const donations_: DonationData[] = [
   { user: "购买服务器", note: "zty012", amount: -480 },
   // { user: "域名 2y.nz", note: "zty012", amount: -151.8 },
@@ -230,7 +229,7 @@ const donations_: DonationData[] = [
  * @returns
  */
 export default function CreditsTab() {
-  const [donations, setDonations] = useState<DonationData[]>([]);
+  const [donations, setDonations] = useState<DonationData[]>(donations_);
   const totalAmount = donations.reduce((sum, donation) => sum + donation.amount, 0);
   const [isDev] = useAtom(isDevAtom);
   const [hasSentScrollToBottom, setHasSentScrollToBottom] = useState(false);
@@ -249,8 +248,7 @@ export default function CreditsTab() {
       .then((data) => {
         setDonations(data);
       })
-      .catch((e) => {
-        console.log(e);
+      .catch(() => {
         setIsError(true);
       })
       .finally(() => {
@@ -274,6 +272,7 @@ export default function CreditsTab() {
   const diffTime = currentDate.getTime() - startDate.getTime();
   const daysDiff = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   const actualDays = Math.max(daysDiff + 1, 1); // 至少为1天
+  const canShowDonations = !isLoading && (!isError || donations.length > 0);
 
   useEffect(() => {
     Telemetry.event("credits_opened");
@@ -389,7 +388,15 @@ export default function CreditsTab() {
           </div>
         </div>
       )}
-      {!isLoading && !isError && isTableMode && (
+      {canShowDonations && isError && (
+        <div className="bg-muted/50 mb-4 inline-flex w-full break-inside-avoid flex-col gap-2 rounded-lg border p-4">
+          <div className="flex items-center justify-center gap-2">
+            <AlertCircle className="h-5 w-5" />
+            <span className="text-lg">在线支持者名单加载失败，当前显示本地记录</span>
+          </div>
+        </div>
+      )}
+      {canShowDonations && isTableMode && (
         <div className="flex flex-col overflow-hidden rounded-lg border" style={{ maxHeight: "calc(80vh - 200px)" }}>
           <table className="w-full">
             <thead className="bg-muted/50 sticky top-0 z-10">
@@ -429,7 +436,7 @@ export default function CreditsTab() {
           </div>
         </div>
       )}
-      {!isLoading && !isError && !isTableMode && (
+      {canShowDonations && !isTableMode && (
         <div className="columns-1 gap-4 sm:columns-2 md:columns-3 lg:columns-4 xl:columns-5">
           {[...donations].reverse().map((donation, index) => (
             <Donation
@@ -442,7 +449,7 @@ export default function CreditsTab() {
           ))}
         </div>
       )}
-      {!isLoading && isError && (
+      {!isLoading && isError && donations.length === 0 && (
         <div className="flex h-64 w-full flex-col justify-center">
           <div className="flex items-center justify-center gap-2">
             <AlertCircle className="h-5 w-5" />

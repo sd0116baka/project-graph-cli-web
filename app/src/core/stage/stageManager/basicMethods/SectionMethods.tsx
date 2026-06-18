@@ -193,18 +193,6 @@ export class SectionMethods {
     return this._isEntityInSection(entity, section, 0);
   }
 
-  /**
-   * 检测某个实体的几何区域是否在某个集合内，仅计算碰撞，不看引用，所以是个假的
-   * 性能比较高
-   * @param entity
-   * @param section
-   */
-  private isEntityInSection_fake(entity: Entity, section: Section): boolean {
-    const entityBox = entity.collisionBox.getRectangle();
-    const sectionBox = section.collisionBox.getRectangle();
-    return entityBox.isCollideWithRectangle(sectionBox);
-  }
-
   private _isEntityInSection(entity: Entity, section: Section, deep = 0): boolean {
     if (deep > 996) {
       return false;

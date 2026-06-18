@@ -47,8 +47,11 @@ fn qt_ipc_response(id: String, ok: bool, data: serde_json::Value) {
 pub fn do_qt_ipc_response(id: String, ok: bool, data: serde_json::Value) {
     let data_str = serde_json::to_string(&data).unwrap_or_else(|_| "null".to_string());
     // println!("Forwarding response to Qt: id={}, ok={}, data={}", id, ok, data_str);
-    
-    let js = format!("window.__TAURI_IPC_RESOLVE__(\"{}\", {}, {});", id, ok, data_str);
+
+    let js = format!(
+        "window.__TAURI_IPC_RESOLVE__(\"{}\", {}, {});",
+        id, ok, data_str
+    );
     ipc_bridge::qobject::qt_evaluate_js(&cxx_qt_lib::QString::from(&js));
 }
 
@@ -106,7 +109,7 @@ pub fn run() {
             {
                 app.handle().plugin(tauri_plugin_cli::init())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
-                
+
                 // On Linux Qt mode, we don't want window state to interfere with hidden windows
                 #[cfg(not(target_os = "linux"))]
                 app.handle()
@@ -163,7 +166,10 @@ pub fn run() {
 
         // Initialize Qt on the main thread
         unsafe {
-            let app_data_path = handle.path().app_data_dir().unwrap_or_else(|_| std::env::current_dir().unwrap());
+            let app_data_path = handle
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::current_dir().unwrap());
             let qpa_file_path = app_data_path.join("QT_QPA_PLATFORM.txt");
 
             let qpa_platform = if qpa_file_path.exists() {
@@ -180,10 +186,10 @@ pub fn run() {
 
             println!("Setting QT_QPA_PLATFORM to: {}", qpa_platform);
             std::env::set_var("QT_QPA_PLATFORM", &qpa_platform);
-            
+
             let path_str = app_data_path.to_string_lossy().to_string();
             println!("App data path: {}", path_str);
-            
+
             ipc_bridge::qobject::init_qt_app(&cxx_qt_lib::QString::from(&path_str));
         }
 
@@ -193,7 +199,7 @@ pub fn run() {
         let proxy_window = tauri::webview::WebviewWindowBuilder::new(
             &handle,
             "proxy",
-            WebviewUrl::App("/proxy.html".into())
+            WebviewUrl::App("/proxy.html".into()),
         )
         .title("Project Graph Proxy")
         .visible(false)
@@ -218,7 +224,7 @@ pub fn run() {
                 headers: String,
                 is_binary_args: bool,
             }
-            
+
             if let Ok(req) = serde_json::from_str::<QtIpcRequest>(payload) {
                 if let Some(window) = handle.get_webview_window("proxy") {
                     println!("Forwarding IPC request to proxy window: cmd={}, args={}, headers={}", req.cmd, req.args, req.headers);
@@ -259,7 +265,7 @@ pub fn run() {
                             }}
                         }})();
                     "#, req.cmd, req.req_id, req.cmd, args_expr, req.headers, req.req_id, req.req_id);
-                    
+
                     window.eval(&js).ok();
                 } else {
                     println!("Proxy window NOT found during IPC request!");
@@ -268,7 +274,7 @@ pub fn run() {
         });
 
         println!("Starting Tauri event loop on main thread...");
-        
+
         // Spawn a background timer to keep the main event loop alive for Qt
         let handle_clone = app.handle().clone();
         std::thread::spawn(move || {
@@ -282,9 +288,7 @@ pub fn run() {
 
         app.run(move |app_handle, event| {
             // Drive Qt events whenever anything happens
-            let should_continue = unsafe {
-                ipc_bridge::qobject::tick_qt_app()
-            };
+            let should_continue = unsafe { ipc_bridge::qobject::tick_qt_app() };
 
             if !should_continue {
                 app_handle.exit(0);

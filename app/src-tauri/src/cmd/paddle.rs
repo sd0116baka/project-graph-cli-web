@@ -38,7 +38,9 @@ where
     F: FnOnce(&mut PaddleOCRVLGenerateModel) -> Result<R, String>,
 {
     let model_mutex = OCR_MODEL.get_or_init(|| Mutex::new(None));
-    let mut guard = model_mutex.lock().map_err(|e| format!("Failed to lock model mutex: {}", e))?;
+    let mut guard = model_mutex
+        .lock()
+        .map_err(|e| format!("Failed to lock model mutex: {}", e))?;
 
     if guard.is_none() {
         let save_dir = aha::utils::get_default_save_dir().ok_or_else(|| {

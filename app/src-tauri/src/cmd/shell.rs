@@ -9,7 +9,11 @@ pub struct RunCommandResult {
 }
 
 #[tauri::command]
-pub fn run_command(program: String, cmd_args: Vec<String>, stdin: Option<String>) -> RunCommandResult {
+pub fn run_command(
+    program: String,
+    cmd_args: Vec<String>,
+    stdin: Option<String>,
+) -> RunCommandResult {
     let mut cmd = Command::new(&program);
     cmd.args(&cmd_args);
 
