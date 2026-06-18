@@ -2,14 +2,18 @@
 import {
   PROJECT_GRAPH_OPS_SCHEMA,
   applyOperationsToArchive,
+  assertValidProjectGraphPatchPayload,
   exportMarkdown,
   exportMermaid,
   exportPgJson,
   importMarkdown,
   importMermaid,
   pgJsonToArchive,
+  queryArchive,
   type PgJsonDocument,
   type ProjectGraphPatch,
+  type ProjectGraphQuery,
+  type ProjectGraphQueryKind,
 } from "@graphif/project-graph-core";
 import {
   inspectPrgArchive,
@@ -25,7 +29,17 @@ import { join } from "node:path";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-type Command = "inspect" | "validate" | "export" | "import" | "patch" | "upgrade" | "schema" | "live" | "help";
+type Command =
+  | "inspect"
+  | "validate"
+  | "export"
+  | "import"
+  | "patch"
+  | "query"
+  | "upgrade"
+  | "schema"
+  | "live"
+  | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
 type ImportFormat = "pgjson" | "markdown" | "mermaid";
 
@@ -39,10 +53,16 @@ interface ParsedArgs {
   baseRevision?: number;
   port?: number;
   token?: string;
+  queryKind?: string;
+  queryText?: string;
+  queryId?: string;
+  querySection?: string | null;
+  queryLimit?: number;
   json: boolean;
   inPlace: boolean;
   livePatchSave: boolean;
   preserveThumbnail: boolean;
+  includeUnsupported: boolean;
 }
 
 const helpText = `Project Graph CLI
@@ -53,6 +73,7 @@ Usage:
   project-graph export <file.prg> --format pgjson|markdown|mermaid [-o output] [--root <node-id>]
   project-graph import <input.pg.json|input.md|input.mmd> --format pgjson|markdown|mermaid -o output.prg
   project-graph patch <input.prg> <ops.json> -o output.prg
+  project-graph query <file.prg> [--kind all|node|section|edge|attachment|unsupported] [--text <contains>] [--id <id>] [--section <id|null>] [--limit <n>] [--json]
   project-graph schema ops [-o output.schema.json]
   project-graph upgrade <input.prg> -o output.prg [--preserve-thumbnail]
   project-graph live list-sessions [--json]
@@ -60,6 +81,7 @@ Usage:
   project-graph live open <file.prg|file-uri> [--json] [--port <port> --token <token>]
   project-graph live inspect [--document <id>] [--json]
   project-graph live export --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--document <id>] [--json]
+  project-graph live query [--document <id>] [--kind all|node|section|edge|attachment|unsupported] [--text <contains>] [--id <id>] [--section <id|null>] [--limit <n>] [--json]
   project-graph live patch <ops.json> [--document <id>] [--base-revision <n>] [--json] [--no-save]
   project-graph help
 
@@ -69,6 +91,7 @@ Commands:
   export    Export a document to pgjson, Markdown, or Mermaid.
   import    Import pgjson, Markdown, or Mermaid into a new .prg document.
   patch     Apply an operation batch and write a new .prg document.
+  query     Query graph objects for agent-friendly lookup.
   schema    Print machine-readable schemas for agent-authored payloads.
   upgrade   Re-encode a .prg archive while preserving attachments and unknown entries.
   live      Send commands to a GUI instance started with --live.
@@ -162,6 +185,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
+  if (args.command === "query") {
+    const file = requirePositional(args, 0, "<file.prg>");
+    const archive = await readPrgFile(file);
+    const result = queryArchive(archive, buildQuery(args));
+    printQueryResult(result, args.json);
+    return 0;
+  }
+
   if (args.command === "schema") {
     const subject = requirePositional(args, 0, "ops");
     if (subject !== "ops") {
@@ -195,10 +226,16 @@ function parseArgs(argv: string[]): ParsedArgs {
   let baseRevision: number | undefined;
   let port: number | undefined;
   let token: string | undefined;
+  let queryKind: string | undefined;
+  let queryText: string | undefined;
+  let queryId: string | undefined;
+  let querySection: string | null | undefined;
+  let queryLimit: number | undefined;
   let json = false;
   let inPlace = false;
   let livePatchSave = true;
   let preserveThumbnail = false;
+  let includeUnsupported = false;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -226,6 +263,19 @@ function parseArgs(argv: string[]): ParsedArgs {
       port = Number(requireFlagValue(argv, ++index, arg));
     } else if (arg === "--token") {
       token = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--kind" || arg === "--type") {
+      queryKind = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--text") {
+      queryText = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--id") {
+      queryId = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--section") {
+      const value = requireFlagValue(argv, ++index, arg);
+      querySection = value === "null" ? null : value;
+    } else if (arg === "--limit") {
+      queryLimit = Number(requireFlagValue(argv, ++index, arg));
+    } else if (arg === "--include-unsupported") {
+      includeUnsupported = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -246,10 +296,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       baseRevision,
       port,
       token,
+      queryKind,
+      queryText,
+      queryId,
+      querySection,
+      queryLimit,
       json,
       inPlace,
       livePatchSave,
       preserveThumbnail,
+      includeUnsupported,
     };
   }
 
@@ -259,6 +315,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     rawCommand !== "export" &&
     rawCommand !== "import" &&
     rawCommand !== "patch" &&
+    rawCommand !== "query" &&
     rawCommand !== "upgrade" &&
     rawCommand !== "schema" &&
     rawCommand !== "live"
@@ -276,10 +333,16 @@ function parseArgs(argv: string[]): ParsedArgs {
     baseRevision,
     port,
     token,
+    queryKind,
+    queryText,
+    queryId,
+    querySection,
+    queryLimit,
     json,
     inPlace,
     livePatchSave,
     preserveThumbnail,
+    includeUnsupported,
   };
 }
 
@@ -302,6 +365,57 @@ function printInspection(inspection: PrgInspection): void {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function printQueryResult(result: ReturnType<typeof queryArchive>, json: boolean): void {
+  if (json) {
+    printJson(result);
+    return;
+  }
+  for (const item of result.items) {
+    const id = item.id ?? "(no id)";
+    const label = item.text ? ` ${item.text}` : item.path ? ` ${item.path}` : "";
+    console.log(`${item.kind} ${id} ${item.type}${label}`);
+  }
+  console.log(`total: ${result.total}`);
+}
+
+function buildQuery(args: ParsedArgs): ProjectGraphQuery {
+  const query: ProjectGraphQuery = {
+    kind: requireQueryKind(args.queryKind),
+    includeUnsupported: args.includeUnsupported,
+  };
+  if (args.queryText !== undefined) {
+    query.text = args.queryText;
+  }
+  if (args.queryId !== undefined) {
+    query.id = args.queryId;
+  }
+  if (args.querySection !== undefined) {
+    query.section = args.querySection;
+  }
+  if (args.queryLimit !== undefined) {
+    if (!Number.isInteger(args.queryLimit) || args.queryLimit < 1) {
+      throw new Error("--limit must be a positive integer.");
+    }
+    query.limit = args.queryLimit;
+  }
+  return query;
+}
+
+function requireQueryKind(kind: string | undefined): ProjectGraphQueryKind {
+  if (
+    kind === undefined ||
+    kind === "all" ||
+    kind === "node" ||
+    kind === "section" ||
+    kind === "edge" ||
+    kind === "attachment" ||
+    kind === "unsupported"
+  ) {
+    return kind ?? "all";
+  }
+  throw new Error("Invalid --kind. Expected all, node, section, edge, attachment, or unsupported.");
 }
 
 function requireFlagValue(argv: string[], index: number, flag: string): string {
@@ -357,6 +471,7 @@ function inferImportFormat(file: string): ImportFormat | undefined {
 
 function parsePatch(content: string): ProjectGraphPatch {
   const parsed = JSON.parse(content) as unknown;
+  assertValidProjectGraphPatchPayload(parsed);
   if (Array.isArray(parsed)) {
     return { ops: parsed as ProjectGraphPatch["ops"] };
   }
@@ -425,6 +540,16 @@ async function handleLiveCommand(args: ParsedArgs): Promise<number> {
   if (subcommand === "inspect") {
     const response = await sendLiveRequest("inspect", { document: args.document }, args);
     printLiveResult(response, args.json);
+    return response.ok ? 0 : 1;
+  }
+
+  if (subcommand === "query") {
+    const response = await sendLiveRequest("query", { document: args.document, ...buildQuery(args) }, args);
+    if (response.ok) {
+      printQueryResult(response.result as ReturnType<typeof queryArchive>, args.json);
+    } else {
+      printLiveResult(response, args.json);
+    }
     return response.ok ? 0 : 1;
   }
 

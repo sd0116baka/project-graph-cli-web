@@ -33,9 +33,21 @@ project-graph export .\graph.prg --format markdown -o .\outline.md
 project-graph export .\graph.prg --format mermaid -o .\flow.mmd
 ```
 
+## Query
+
+Use `query` to locate objects before authoring a patch.
+
+```powershell
+project-graph query .\graph.prg --kind node --text Review --json
+project-graph query .\graph.prg --kind section --section null --json
+project-graph query .\graph.prg --kind edge --id review-ship --json
+```
+
+Kinds are `all`, `node`, `section`, `edge`, `attachment`, and `unsupported`.
+
 ## Patch Files
 
-`project-graph patch` accepts either an array of operations or an object with an `ops` array.
+`project-graph patch` accepts either an array of operations or an object with an `ops` array. Patch payloads are validated before they are applied.
 
 ```json
 [
@@ -61,6 +73,8 @@ Apply the patch:
 project-graph patch .\input.prg .\ops.json -o .\output.prg --json
 ```
 
+Supported operations include text nodes, section create/edit/collapse/membership, image and SVG attachment nodes, line edge creation/style, color changes, deletes, Markdown/Mermaid imports, bulk moves, and grid layout. Use the schema command for exact payload shapes.
+
 For machine-readable operation documentation:
 
 ```powershell
@@ -77,6 +91,7 @@ project-graph live list-sessions
 project-graph live list-documents --json
 project-graph live open .\other.prg --json
 project-graph live export --format pgjson --document <id-from-list-documents> -o .\current.pg.json
+project-graph live query --document <id-from-list-documents> --kind node --text Review --json
 project-graph live patch .\ops.json --document <id-from-list-documents> --base-revision 3 --json
 ```
 
@@ -91,3 +106,13 @@ Manual connection is also supported:
 ```powershell
 project-graph live patch .\ops.json --document file:///D:/graph.prg --port 37821 --token <token> --json
 ```
+
+## Smoke Test
+
+On Windows, after building `app\src-tauri\target\debug\project-graph.exe`, run:
+
+```powershell
+pnpm run live:smoke
+```
+
+The smoke test starts the Vite frontend and debug GUI, opens two documents through the live bridge, checks document disambiguation, patches with autosave, compares live and disk exports, validates the saved `.prg`, and verifies corrupt files fail fast.

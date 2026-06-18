@@ -43,6 +43,9 @@ async function runCli(args: string[]): Promise<{ code: number; stdout: string; s
   try {
     const code = await main(args);
     return { code, stdout, stderr };
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return { code: 1, stdout, stderr };
   } finally {
     console.log = originalConsoleLog;
     console.error = originalConsoleError;
@@ -123,6 +126,40 @@ describe("@graphif/project-graph-cli", () => {
     expect(JSON.parse(patchResult.stdout)).toMatchObject({ ok: true, changed: ["ship", "review-ship"] });
     expect(validateResult).toMatchObject({ code: 0, stdout: "OK\n", stderr: "" });
     expect(await readFile(mermaid, "utf8")).toContain('id1 -- "ready" --> id2');
+  });
+
+  it("queries graph objects from a prg document", async () => {
+    const dir = await createTempDir();
+    const markdown = join(dir, "outline.md");
+    const input = join(dir, "input.prg");
+
+    await writeFile(markdown, "# Intake\n\n## Review\n", "utf8");
+
+    expect((await runCli(["import", markdown, "--format", "markdown", "-o", input])).code).toBe(0);
+    const result = await runCli(["query", input, "--kind", "node", "--text", "Review", "--json"]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      total: 1,
+      items: [{ kind: "node", type: "text", text: "Review" }],
+    });
+  });
+
+  it("rejects invalid patch files before writing output", async () => {
+    const dir = await createTempDir();
+    const markdown = join(dir, "outline.md");
+    const input = join(dir, "input.prg");
+    const patch = join(dir, "invalid-ops.json");
+    const output = join(dir, "output.prg");
+
+    await writeFile(markdown, "# Intake\n", "utf8");
+    await writeFile(patch, JSON.stringify([{ op: "add_text_node", text: 42 }]), "utf8");
+
+    expect((await runCli(["import", markdown, "--format", "markdown", "-o", input])).code).toBe(0);
+    const result = await runCli(["patch", input, patch, "-o", output]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("$.ops[0].text must be a string");
   });
 
   it("exports pgjson and imports it back into a prg document", async () => {
@@ -226,6 +263,43 @@ describe("@graphif/project-graph-cli", () => {
       },
     });
     expect(JSON.parse(result.stdout)).toMatchObject({ opened: true });
+  });
+
+  it("sends query params to the live bridge", async () => {
+    const server = await startLiveServer(() => ({
+      total: 1,
+      items: [{ kind: "node", id: "node-a", type: "text", text: "Alpha" }],
+    }));
+
+    const result = await runCli([
+      "live",
+      "query",
+      "--document",
+      "file:///graph.prg",
+      "--kind",
+      "node",
+      "--text",
+      "Alpha",
+      "--port",
+      String(server.port),
+      "--token",
+      "secret",
+      "--json",
+    ]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]).toMatchObject({
+      token: "secret",
+      method: "query",
+      params: {
+        document: "file:///graph.prg",
+        kind: "node",
+        text: "Alpha",
+        includeUnsupported: false,
+      },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ total: 1, items: [{ id: "node-a" }] });
   });
 
   it("unwraps live export content unless json output is requested", async () => {

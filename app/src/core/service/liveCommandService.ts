@@ -8,7 +8,9 @@ import {
   exportMarkdown,
   exportMermaid,
   exportPgJson,
+  queryArchive,
   type ProjectGraphPatch,
+  type ProjectGraphQuery,
 } from "@graphif/project-graph-core";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -102,6 +104,10 @@ async function handleLiveRequest(method: string, params: unknown): Promise<unkno
       revision,
       pgjson: archiveToPgJson(archive),
     };
+  }
+
+  if (method === "query") {
+    return queryArchive(archive, normalizeQuery(options));
   }
 
   if (method === "export") {
@@ -465,9 +471,43 @@ function normalizePatch(params: unknown): ProjectGraphPatch {
   }
   const record = asRecord(params);
   if (Array.isArray(record.ops)) {
-    return record as unknown as ProjectGraphPatch;
+    const patch: Record<string, unknown> = { ops: record.ops };
+    if (record.baseRevision !== undefined) {
+      patch.baseRevision = record.baseRevision;
+    }
+    return patch as unknown as ProjectGraphPatch;
   }
   throw new Error("Live patch params must be an operation array or an object with an ops array.");
+}
+
+function normalizeQuery(params: Record<string, unknown>): ProjectGraphQuery {
+  const query: ProjectGraphQuery = {};
+  if (
+    params.kind === "all" ||
+    params.kind === "node" ||
+    params.kind === "section" ||
+    params.kind === "edge" ||
+    params.kind === "attachment" ||
+    params.kind === "unsupported"
+  ) {
+    query.kind = params.kind;
+  }
+  if (typeof params.id === "string") {
+    query.id = params.id;
+  }
+  if (typeof params.text === "string") {
+    query.text = params.text;
+  }
+  if (typeof params.section === "string" || params.section === null) {
+    query.section = params.section;
+  }
+  if (typeof params.limit === "number" && Number.isInteger(params.limit) && params.limit > 0) {
+    query.limit = params.limit;
+  }
+  if (params.includeUnsupported === true) {
+    query.includeUnsupported = true;
+  }
+  return query;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
