@@ -5,7 +5,8 @@ param(
   [string]$AuthUser = "pg",
   [string]$AuthPassword = "",
   [string]$DataDir = "",
-  [string]$LogPath = ""
+  [string]$LogPath = "",
+  [switch]$LocalOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,8 +151,10 @@ if (-not $NoAuth) {
 $Runtime = Read-WebRuntime -Root $Root
 if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port") -and $Runtime.dataDir) {
   $RuntimePort = [int]$Runtime.port
-  if ((Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir) -and (Test-ProjectGraphHealth $RuntimePort)) {
-    $LanIp = Get-LanIp
+  $RuntimeLanMode = if ($Runtime.PSObject.Properties.Name -contains "lanMode") { [bool]$Runtime.lanMode } else { $true }
+  $RequestedLanMode = -not $LocalOnly
+  if ((Test-SameWebPath -Left ([string]$Runtime.dataDir) -Right $DataDir) -and ($RuntimeLanMode -eq $RequestedLanMode) -and (Test-ProjectGraphHealth $RuntimePort)) {
+    $LanIp = if ($LocalOnly) { "127.0.0.1" } else { Get-LanIp }
     $ExistingAuthEnabled = if ($Runtime.PSObject.Properties.Name -contains "authEnabled") { [bool]$Runtime.authEnabled } else { -not $NoAuth }
     $ExistingAuthUser = if (($Runtime.PSObject.Properties.Name -contains "authUser") -and $Runtime.authUser) { [string]$Runtime.authUser } else { $AuthUser }
     $ExistingAuthPassword = $AuthPassword
@@ -160,11 +163,15 @@ if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port") -and $Run
       $ExistingAuthUser = if ($ExistingAuthConfig.user) { [string]$ExistingAuthConfig.user } else { $ExistingAuthUser }
       $ExistingAuthPassword = if ($ExistingAuthConfig.password) { [string]$ExistingAuthConfig.password } else { $ExistingAuthPassword }
     }
-    Write-WebBackendRegistryTarget -Port $RuntimePort -DataDir $DataDir -AuthEnabled $ExistingAuthEnabled -AuthUser $ExistingAuthUser -LanIp $LanIp
+    Write-WebBackendRegistryTarget -Port $RuntimePort -DataDir $DataDir -AuthEnabled $ExistingAuthEnabled -AuthUser $ExistingAuthUser -LanIp $LanIp -LanMode (-not $LocalOnly)
     Write-WebLine ""
     Write-WebLine "Project Graph Web is already running."
     Write-WebLine "Local:  http://127.0.0.1:$RuntimePort"
-    Write-WebLine "LAN:    http://$LanIp`:$RuntimePort"
+    if ($LocalOnly) {
+      Write-WebLine "LAN:    disabled"
+    } else {
+      Write-WebLine "LAN:    http://$LanIp`:$RuntimePort"
+    }
     Write-WebLine "Data:   $DataDir"
     if ($ExistingAuthEnabled) {
       Write-WebLine "User:   $ExistingAuthUser"
@@ -181,9 +188,10 @@ if ($Runtime -and ($Runtime.PSObject.Properties.Name -contains "port") -and $Run
 }
 
 $SelectedPort = Get-FreePort $Port
-$LanIp = Get-LanIp
+$LanIp = if ($LocalOnly) { "127.0.0.1" } else { Get-LanIp }
+$BindHost = if ($LocalOnly) { "127.0.0.1" } else { "0.0.0.0" }
 
-$env:PG_WEB_HOST = "0.0.0.0"
+$env:PG_WEB_HOST = $BindHost
 $env:PG_WEB_PORT = [string]$SelectedPort
 $env:PG_WEB_DATA_DIR = $DataDir
 $env:PG_WEB_STATIC_DIR = $DistDir
@@ -199,7 +207,11 @@ if (-not $NoAuth) {
 Write-WebLine ""
 Write-WebLine "Project Graph Web is starting..."
 Write-WebLine "Local:  http://127.0.0.1:$SelectedPort"
-Write-WebLine "LAN:    http://$LanIp`:$SelectedPort"
+if ($LocalOnly) {
+  Write-WebLine "LAN:    disabled"
+} else {
+  Write-WebLine "LAN:    http://$LanIp`:$SelectedPort"
+}
 Write-WebLine "Data:   $DataDir"
 if (-not $NoAuth) {
   Write-WebLine "User:   $AuthUser"
@@ -222,7 +234,7 @@ if ($LogPath) {
 }
 Write-WebLine ""
 
-Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser -LanIp $LanIp
+Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser -LanIp $LanIp -LanMode (-not $LocalOnly)
 
 if ($LogPath) {
   & node server/src/server.js 2>&1 | Tee-Object -FilePath $LogPath -Append

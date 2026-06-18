@@ -101,7 +101,8 @@ function Write-WebBackendRegistryTarget {
     [Parameter(Mandatory = $true)]
     [string]$AuthUser,
     [Parameter(Mandatory = $true)]
-    [string]$LanIp
+    [string]$LanIp,
+    [bool]$LanMode = $true
   )
 
   $RegistryPath = Get-WebBackendRegistryPath
@@ -112,12 +113,12 @@ function Write-WebBackendRegistryTarget {
     kind = "daemon"
     url = "http://127.0.0.1:$Port"
     localUrl = "http://127.0.0.1:$Port"
-    lanUrl = "http://$LanIp`:$Port"
+    lanUrl = if ($LanMode) { "http://$LanIp`:$Port" } else { "" }
     port = $Port
     apiVersion = "0.1"
     authMode = if ($AuthEnabled) { "basic" } else { "none" }
     authUser = if ($AuthEnabled) { $AuthUser } else { "" }
-    lanMode = $true
+    lanMode = $LanMode
     dataDirName = Split-Path -Leaf $DataDir
     localDataDir = $DataDir
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -169,7 +170,8 @@ function Write-WebRuntime {
     [Parameter(Mandatory = $true)]
     [bool]$AuthEnabled,
     [string]$AuthUser = "",
-    [string]$LanIp = "127.0.0.1"
+    [string]$LanIp = "127.0.0.1",
+    [bool]$LanMode = $true
   )
 
   $RuntimePath = Get-WebRuntimePath -Root $Root
@@ -180,10 +182,11 @@ function Write-WebRuntime {
     staticDir = $StaticDir
     authEnabled = $AuthEnabled
     authUser = $AuthUser
+    lanMode = $LanMode
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
   } | ConvertTo-Json | Set-Content -LiteralPath $RuntimePath -Encoding UTF8
 
-  Write-WebBackendRegistryTarget -Port $Port -DataDir $DataDir -AuthEnabled $AuthEnabled -AuthUser $AuthUser -LanIp $LanIp
+  Write-WebBackendRegistryTarget -Port $Port -DataDir $DataDir -AuthEnabled $AuthEnabled -AuthUser $AuthUser -LanIp $LanIp -LanMode $LanMode
 }
 
 function Assert-SafeWebDataDir {
