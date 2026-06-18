@@ -16,6 +16,8 @@ The upstream desktop product remains documented in [app/README.md](app/README.md
 | Desktop live bridge | CLI automation against a running desktop graph.      | [README-cli.md](README-cli.md) |
 | LAN Web backend     | Shared backend and browser UI for local network use. | [README-web.md](README-web.md) |
 
+The backend-first convergence plan is documented in [docs/backend-first-architecture.md](docs/backend-first-architecture.md).
+
 ## Development Setup
 
 Requirements:
