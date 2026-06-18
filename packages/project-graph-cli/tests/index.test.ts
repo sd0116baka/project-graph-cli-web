@@ -559,6 +559,161 @@ describe("@graphif/project-graph-cli", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, etag: '"etag-validate"', issues: [] });
   });
 
+  it("discovers backend targets from the local registry", async () => {
+    const dir = await createTempDir();
+    const registryPath = join(dir, "project-graph-backends.json");
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/health") {
+        return { body: { ok: true } };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+    const oldRegistry = process.env.PROJECT_GRAPH_BACKEND_REGISTRY;
+    const oldServerUrl = process.env.PROJECT_GRAPH_SERVER_URL;
+    process.env.PROJECT_GRAPH_BACKEND_REGISTRY = registryPath;
+    delete process.env.PROJECT_GRAPH_SERVER_URL;
+    await writeFile(
+      registryPath,
+      `\uFEFF${JSON.stringify({
+        targets: [
+          {
+            id: "local-test",
+            kind: "daemon",
+            url: `http://127.0.0.1:${server.port}`,
+            port: server.port,
+            apiVersion: "0.1",
+            authMode: "none",
+            dataDirName: "data",
+            capabilities: { projects: true, query: true, patch: true },
+          },
+        ],
+      })}`,
+      "utf8",
+    );
+
+    try {
+      const result = await runCli(["target", "list", "--json"]);
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        targets: [
+          {
+            id: "local-test",
+            kind: "daemon",
+            url: `http://127.0.0.1:${server.port}`,
+            reachable: true,
+            apiVersion: "0.1",
+            authMode: "none",
+            dataDirName: "data",
+          },
+        ],
+      });
+    } finally {
+      if (oldRegistry === undefined) {
+        delete process.env.PROJECT_GRAPH_BACKEND_REGISTRY;
+      } else {
+        process.env.PROJECT_GRAPH_BACKEND_REGISTRY = oldRegistry;
+      }
+      if (oldServerUrl === undefined) {
+        delete process.env.PROJECT_GRAPH_SERVER_URL;
+      } else {
+        process.env.PROJECT_GRAPH_SERVER_URL = oldServerUrl;
+      }
+    }
+  });
+
+  it("ignores malformed backend registry files", async () => {
+    const dir = await createTempDir();
+    const registryPath = join(dir, "project-graph-backends.json");
+    const oldRegistry = process.env.PROJECT_GRAPH_BACKEND_REGISTRY;
+    const oldServerUrl = process.env.PROJECT_GRAPH_SERVER_URL;
+    process.env.PROJECT_GRAPH_BACKEND_REGISTRY = registryPath;
+    delete process.env.PROJECT_GRAPH_SERVER_URL;
+    await writeFile(registryPath, "{not-json", "utf8");
+
+    try {
+      const result = await runCli(["target", "list", "--json"]);
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({ targets: [] });
+    } finally {
+      if (oldRegistry === undefined) {
+        delete process.env.PROJECT_GRAPH_BACKEND_REGISTRY;
+      } else {
+        process.env.PROJECT_GRAPH_BACKEND_REGISTRY = oldRegistry;
+      }
+      if (oldServerUrl === undefined) {
+        delete process.env.PROJECT_GRAPH_SERVER_URL;
+      } else {
+        process.env.PROJECT_GRAPH_SERVER_URL = oldServerUrl;
+      }
+    }
+  });
+
+  it("classifies IPv6 loopback URLs as local daemon targets", async () => {
+    const serverUrl = process.env.PROJECT_GRAPH_SERVER_URL;
+    process.env.PROJECT_GRAPH_SERVER_URL = "http://[::1]:37820";
+    try {
+      const result = await runCli(["target", "list", "--json"]);
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        targets: [{ id: "local-::1-37820", kind: "daemon", url: "http://[::1]:37820" }],
+      });
+    } finally {
+      if (serverUrl === undefined) {
+        delete process.env.PROJECT_GRAPH_SERVER_URL;
+      } else {
+        process.env.PROJECT_GRAPH_SERVER_URL = serverUrl;
+      }
+    }
+  });
+
+  it("prints daemon status and version from server info", async () => {
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/server-info") {
+        return {
+          body: {
+            ok: true,
+            name: "Project Graph Backend",
+            apiVersion: "0.1",
+            authMode: "none",
+            lanMode: true,
+            dataDirName: "data",
+            capabilities: { projects: true, query: true, patch: true, events: false },
+          },
+        };
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+
+    const statusResult = await runCli(["daemon", "status", "--url", url, "--json"]);
+    const versionResult = await runCli(["daemon", "version", "--url", url, "--json"]);
+
+    expect(statusResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(statusResult.stdout)).toMatchObject({
+      ok: true,
+      url,
+      apiVersion: "0.1",
+      authMode: "none",
+      dataDirName: "data",
+    });
+    expect(versionResult).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(versionResult.stdout)).toMatchObject({ ok: true, url, apiVersion: "0.1" });
+  });
+
+  it("documents daemon start stop and restart commands", async () => {
+    const result = await runCli(["help"]);
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toContain("project-graph daemon start");
+    expect(result.stdout).toContain("project-graph daemon stop");
+    expect(result.stdout).toContain("project-graph daemon restart");
+  });
+
   it("prints structured JSON for Web backend CLI argument errors", async () => {
     const result = await runCli(["server", "list", "--bad", "--json"]);
 

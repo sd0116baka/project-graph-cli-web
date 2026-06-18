@@ -86,6 +86,23 @@ project-graph schema ops -o .\project-graph-ops.schema.json
 
 `server` commands target a Project Graph Web backend. By default the CLI connects to `http://127.0.0.1:37820`.
 
+Discover available backend and compatibility live targets:
+
+```powershell
+project-graph target list --json
+project-graph daemon start --skip-build --json
+project-graph daemon health --json
+project-graph daemon status --json
+project-graph daemon version --json
+project-graph daemon stop --json
+```
+
+The Web startup scripts write a local backend registry so agents do not have to guess the active port. To override the registry location for automation or tests, set:
+
+```powershell
+$env:PROJECT_GRAPH_BACKEND_REGISTRY = "C:\path\to\project-graph-backends.json"
+```
+
 ```powershell
 project-graph server list --json
 project-graph server query <project-id> --kind node --text Review --json

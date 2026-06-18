@@ -27,6 +27,8 @@ export namespace ServerProjectManager {
 
   export type ServerInfo = {
     ok: true;
+    name?: string;
+    apiVersion?: string;
     host: string;
     port: number;
     dataDirName: string;
@@ -34,9 +36,30 @@ export namespace ServerProjectManager {
     customDataDir: boolean;
     staticEnabled: boolean;
     authEnabled: boolean;
+    authMode?: string;
+    lanMode?: boolean;
     allowedOrigin: string;
+    capabilities?: Record<string, boolean>;
     serverUrl: string;
     clientName: string;
+  };
+
+  export type BackendTarget = {
+    id?: string;
+    kind?: string;
+    url?: string;
+    localUrl?: string;
+    lanUrl?: string;
+    port?: number;
+    apiVersion?: string;
+    authMode?: string;
+    authUser?: string;
+    lanMode?: boolean;
+    dataDirName?: string;
+    localDataDir?: string;
+    capabilities?: Record<string, boolean>;
+    reachable?: boolean;
+    source?: string;
   };
 
   export type ServerProjectErrorDetail = {
@@ -98,6 +121,14 @@ export namespace ServerProjectManager {
       serverUrl: serverBaseUrl() || (typeof window !== "undefined" ? window.location.origin : ""),
       clientName: getClientName(),
     };
+  }
+
+  export async function discoverBackendTargets(): Promise<BackendTarget[]> {
+    if (!isTauriRuntime()) {
+      return [];
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<BackendTarget[]>("project_graph_backend_targets");
   }
 
   export async function createProject(name: string): Promise<ServerProject> {
@@ -266,6 +297,10 @@ export namespace ServerProjectManager {
       return new URL(path, window.location.origin).toString();
     }
     return path;
+  }
+
+  function isTauriRuntime(): boolean {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   }
 
   function serverBaseUrl(): string {

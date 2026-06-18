@@ -23,11 +23,12 @@ import {
   writePrgFile,
   type PrgInspection,
 } from "@graphif/prg-codec";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Command =
@@ -41,6 +42,8 @@ type Command =
   | "schema"
   | "server"
   | "live"
+  | "target"
+  | "daemon"
   | "help";
 type ExportFormat = "pgjson" | "markdown" | "mermaid";
 type ImportFormat = "pgjson" | "markdown" | "mermaid";
@@ -58,6 +61,9 @@ interface ParsedArgs {
   serverUrl?: string;
   serverUser?: string;
   serverPassword?: string;
+  daemonDataDir?: string;
+  daemonSkipBuild: boolean;
+  daemonNoAuth: boolean;
   etag?: string;
   queryKind?: string;
   queryText?: string;
@@ -87,6 +93,13 @@ Usage:
   project-graph server patch <project-id> <ops.json> [--url <url>] [--user <user> --password <password>] [--etag <etag>] [--json]
   project-graph server export <project-id> --format pgjson|markdown|mermaid [-o output] [--root <node-id>] [--url <url>] [--user <user> --password <password>] [--json]
   project-graph server validate <project-id> [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph target list [--url <url>] [--json]
+  project-graph daemon start [--port <n>] [--data-dir <path>] [--user <user> --password <password>] [--no-auth] [--skip-build] [--json]
+  project-graph daemon stop [--port <n>] [--json]
+  project-graph daemon restart [--port <n>] [--data-dir <path>] [--user <user> --password <password>] [--no-auth] [--skip-build] [--json]
+  project-graph daemon health [--url <url>] [--json]
+  project-graph daemon status [--url <url>] [--user <user> --password <password>] [--json]
+  project-graph daemon version [--url <url>] [--user <user> --password <password>] [--json]
   project-graph live list-sessions [--json]
   project-graph live list-documents [--json] [--port <port> --token <token>]
   project-graph live open <file.prg|file-uri> [--json] [--port <port> --token <token>]
@@ -106,12 +119,16 @@ Commands:
   schema    Print machine-readable schemas for agent-authored payloads.
   upgrade   Re-encode a .prg archive while preserving attachments and unknown entries.
   server    Send commands to a Project Graph Web backend.
+  target    Discover backend and compatibility live targets.
+  daemon    Inspect a Project Graph backend daemon.
   live      Send commands to a GUI instance started with --live.
 
 Environment:
   PROJECT_GRAPH_SERVER_URL       Default Web backend URL.
   PROJECT_GRAPH_SERVER_USER      Basic auth user for Web backend requests.
   PROJECT_GRAPH_SERVER_PASSWORD  Basic auth password for Web backend requests.
+  PROJECT_GRAPH_BACKEND_REGISTRY Backend discovery registry path.
+  PROJECT_GRAPH_ROOT             Repository root used by daemon script wrappers.
 `;
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -253,6 +270,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return handleServerCommand(args);
   }
 
+  if (args.command === "target") {
+    return handleTargetCommand(args);
+  }
+
+  if (args.command === "daemon") {
+    return handleDaemonCommand(args);
+  }
+
   return 2;
 }
 
@@ -268,6 +293,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   let serverUrl: string | undefined;
   let serverUser: string | undefined;
   let serverPassword: string | undefined;
+  let daemonDataDir: string | undefined;
+  let daemonSkipBuild = false;
+  let daemonNoAuth = false;
   let etag: string | undefined;
   let queryKind: string | undefined;
   let queryText: string | undefined;
@@ -312,6 +340,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       serverUser = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--password") {
       serverPassword = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--data-dir") {
+      daemonDataDir = requireFlagValue(argv, ++index, arg);
+    } else if (arg === "--skip-build") {
+      daemonSkipBuild = true;
+    } else if (arg === "--no-auth") {
+      daemonNoAuth = true;
     } else if (arg === "--etag" || arg === "--if-match") {
       etag = requireFlagValue(argv, ++index, arg);
     } else if (arg === "--kind" || arg === "--type") {
@@ -350,6 +384,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       serverUrl,
       serverUser,
       serverPassword,
+      daemonDataDir,
+      daemonSkipBuild,
+      daemonNoAuth,
       etag,
       queryKind,
       queryText,
@@ -374,7 +411,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     rawCommand !== "upgrade" &&
     rawCommand !== "schema" &&
     rawCommand !== "server" &&
-    rawCommand !== "live"
+    rawCommand !== "live" &&
+    rawCommand !== "target" &&
+    rawCommand !== "daemon"
   ) {
     throw new Error(`Unknown command: ${rawCommand}`);
   }
@@ -392,6 +431,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     serverUrl,
     serverUser,
     serverPassword,
+    daemonDataDir,
+    daemonSkipBuild,
+    daemonNoAuth,
     etag,
     queryKind,
     queryText,
@@ -407,7 +449,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function isServerJsonRequest(argv: string[]): boolean {
-  return argv[0] === "server" && argv.includes("--json");
+  return (argv[0] === "server" || argv[0] === "target" || argv[0] === "daemon") && argv.includes("--json");
 }
 
 function printInspection(inspection: PrgInspection): void {
@@ -569,6 +611,75 @@ interface ServerProject {
   } | null;
 }
 
+interface BackendCapabilityMap {
+  projects?: boolean;
+  blobs?: boolean;
+  query?: boolean;
+  patch?: boolean;
+  export?: boolean;
+  validate?: boolean;
+  import?: boolean;
+  history?: boolean;
+  restore?: boolean;
+  locks?: boolean;
+  events?: boolean;
+}
+
+interface BackendRegistryEntry {
+  id?: string;
+  kind?: string;
+  url?: string;
+  localUrl?: string;
+  lanUrl?: string;
+  port?: number;
+  apiVersion?: string;
+  authMode?: string;
+  authUser?: string;
+  lanMode?: boolean;
+  dataDirName?: string;
+  localDataDir?: string;
+  startedAt?: string;
+  capabilities?: BackendCapabilityMap;
+}
+
+interface TargetInfo {
+  id: string;
+  kind: "daemon" | "lan" | "live";
+  url?: string;
+  localUrl?: string;
+  lanUrl?: string;
+  apiVersion?: string;
+  authMode?: string;
+  authUser?: string;
+  lanMode?: boolean;
+  dataDirName?: string;
+  localDataDir?: string;
+  capabilities?: BackendCapabilityMap;
+  reachable?: boolean;
+  infoError?: string;
+  registryPath?: string;
+  pid?: number;
+  port?: number;
+  source: string;
+}
+
+interface ServerInfoResponse {
+  ok: true;
+  name?: string;
+  apiVersion?: string;
+  host?: string;
+  port?: number;
+  dataDirName?: string;
+  staticDirName?: string | null;
+  customDataDir?: boolean;
+  staticEnabled?: boolean;
+  authEnabled?: boolean;
+  authMode?: string;
+  lanMode?: boolean;
+  allowedOrigin?: string;
+  capabilities?: BackendCapabilityMap;
+}
+
 async function handleServerCommand(args: ParsedArgs): Promise<number> {
   try {
     return await runServerCommand(args);
@@ -698,6 +809,483 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
   }
 
   throw new Error(`Unknown server subcommand: ${subcommand}`);
+}
+
+async function handleTargetCommand(args: ParsedArgs): Promise<number> {
+  try {
+    return await runTargetCommand(args);
+  } catch (error) {
+    if (args.json) {
+      printJson(serverErrorPayload(error));
+      return 1;
+    }
+    throw error;
+  }
+}
+
+async function runTargetCommand(args: ParsedArgs): Promise<number> {
+  const subcommand = args.positionals[0] ?? "help";
+  if (subcommand === "help") {
+    console.log(helpText);
+    return 0;
+  }
+  if (subcommand !== "list") {
+    throw new Error(`Unknown target subcommand: ${subcommand}`);
+  }
+
+  const targets = await discoverTargets(args);
+  if (args.json) {
+    printJson({ targets });
+  } else {
+    printTargets(targets);
+  }
+  return 0;
+}
+
+async function handleDaemonCommand(args: ParsedArgs): Promise<number> {
+  try {
+    return await runDaemonCommand(args);
+  } catch (error) {
+    if (args.json) {
+      printJson(serverErrorPayload(error));
+      return 1;
+    }
+    throw error;
+  }
+}
+
+async function runDaemonCommand(args: ParsedArgs): Promise<number> {
+  const subcommand = args.positionals[0] ?? "help";
+  if (subcommand === "help") {
+    console.log(helpText);
+    return 0;
+  }
+
+  if (subcommand === "start") {
+    const childPid = startDaemonScript(args);
+    const target = await waitForDaemonTarget(args.port);
+    if (args.json) {
+      printJson({ ok: true, pid: childPid, target });
+    } else {
+      console.log(`started: ${target.url}`);
+      console.log(`pid: ${childPid}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "stop") {
+    const code = await runDaemonScript("stop-web.ps1", daemonStopScriptArgs(args));
+    if (args.json) {
+      printJson({ ok: code === 0, code });
+    }
+    return code;
+  }
+
+  if (subcommand === "restart") {
+    const stopCode = await runDaemonScript("stop-web.ps1", daemonStopScriptArgs(args));
+    if (stopCode !== 0) {
+      if (args.json) {
+        printJson({ ok: false, stage: "stop", code: stopCode });
+      }
+      return stopCode;
+    }
+    const childPid = startDaemonScript(args);
+    const target = await waitForDaemonTarget(args.port);
+    if (args.json) {
+      printJson({ ok: true, pid: childPid, target });
+    } else {
+      console.log(`restarted: ${target.url}`);
+      console.log(`pid: ${childPid}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "health") {
+    const url = serverBaseUrl(args);
+    const reachable = await testBackendHealth(url);
+    const payload = { ok: reachable, url };
+    if (args.json) {
+      printJson(payload);
+    } else {
+      console.log(reachable ? `OK ${url}` : `unreachable ${url}`);
+    }
+    return reachable ? 0 : 1;
+  }
+
+  if (subcommand === "status" || subcommand === "version") {
+    const info = await fetchServerInfo(args);
+    if (subcommand === "version") {
+      const payload = { ok: true, url: serverBaseUrl(args), apiVersion: info.apiVersion ?? "unknown" };
+      if (args.json) {
+        printJson(payload);
+      } else {
+        console.log(payload.apiVersion);
+      }
+      return 0;
+    }
+
+    const payload = { ...info, url: serverBaseUrl(args) };
+    if (args.json) {
+      printJson(payload);
+    } else {
+      printDaemonStatus(payload);
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown daemon subcommand: ${subcommand}`);
+}
+
+function startDaemonScript(args: ParsedArgs): number | undefined {
+  const script = projectScriptPath("start-web.ps1");
+  const root = findProjectRoot();
+  const scriptArgs = powerShellScriptArgs(script, daemonStartScriptArgs(args));
+  if (process.platform !== "win32") {
+    const child = spawn(powerShellExecutable(), scriptArgs, {
+      cwd: root,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: process.env,
+    });
+    child.unref();
+    return child.pid;
+  }
+
+  const command = [
+    `$Process = Start-Process -FilePath ${quotePowerShellString(powerShellExecutable())}`,
+    `-ArgumentList @(${scriptArgs.map(quotePowerShellString).join(", ")})`,
+    `-WorkingDirectory ${quotePowerShellString(root)}`,
+    "-WindowStyle Hidden",
+    "-PassThru",
+    "; Write-Output $Process.Id",
+  ].join(" ");
+  const result = spawnSync(powerShellExecutable(), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    env: process.env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `PowerShell exited with code ${result.status}`).trim());
+  }
+  const pid = Number(result.stdout.trim());
+  return Number.isFinite(pid) ? pid : undefined;
+}
+
+async function runDaemonScript(scriptName: string, args: string[]): Promise<number> {
+  const script = projectScriptPath(scriptName);
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(powerShellExecutable(), powerShellScriptArgs(script, args), {
+      cwd: findProjectRoot(),
+      stdio: "inherit",
+      windowsHide: true,
+      env: process.env,
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolvePromise(code ?? 1));
+  });
+}
+
+function daemonStartScriptArgs(args: ParsedArgs): string[] {
+  const scriptArgs: string[] = [];
+  if (args.port !== undefined) {
+    scriptArgs.push("-Port", String(args.port));
+  }
+  if (args.daemonDataDir) {
+    scriptArgs.push("-DataDir", args.daemonDataDir);
+  }
+  if (args.daemonSkipBuild) {
+    scriptArgs.push("-SkipBuild");
+  }
+  if (args.daemonNoAuth) {
+    scriptArgs.push("-NoAuth");
+  } else {
+    if (args.serverUser) {
+      scriptArgs.push("-AuthUser", args.serverUser);
+    }
+    if (args.serverPassword) {
+      scriptArgs.push("-AuthPassword", args.serverPassword);
+    }
+  }
+  scriptArgs.push("-LogPath", join(tmpdir(), `project-graph-daemon-${args.port ?? "default"}.log`));
+  return scriptArgs;
+}
+
+function daemonStopScriptArgs(args: ParsedArgs): string[] {
+  if (args.port === undefined) {
+    return [];
+  }
+  return ["-PortStart", String(args.port), "-PortEnd", String(args.port)];
+}
+
+function powerShellExecutable(): string {
+  return process.platform === "win32" ? "powershell.exe" : "pwsh";
+}
+
+function powerShellScriptArgs(script: string, scriptArgs: string[]): string[] {
+  return ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...scriptArgs];
+}
+
+function quotePowerShellString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function projectScriptPath(name: string): string {
+  const script = join(findProjectRoot(), "scripts", name);
+  if (!existsSync(script)) {
+    throw new Error(`Project Graph script not found: ${script}`);
+  }
+  return script;
+}
+
+function findProjectRoot(): string {
+  if (process.env.PROJECT_GRAPH_ROOT) {
+    return resolve(process.env.PROJECT_GRAPH_ROOT);
+  }
+
+  let current = resolve(process.cwd());
+  while (true) {
+    if (existsSync(join(current, "package.json")) && existsSync(join(current, "scripts", "start-web.ps1"))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  throw new Error("Cannot find Project Graph root. Set PROJECT_GRAPH_ROOT or run from the repository.");
+}
+
+async function waitForDaemonTarget(port: number | undefined): Promise<TargetInfo> {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    for (const target of await discoverTargets({ ...emptyParsedArgs(), serverUrl: undefined })) {
+      if (target.kind !== "daemon") {
+        continue;
+      }
+      if (port !== undefined && target.port !== port) {
+        continue;
+      }
+      if (target.reachable !== false) {
+        return target;
+      }
+    }
+    await sleep(500);
+  }
+  throw new Error("Project Graph daemon did not become discoverable before the timeout.");
+}
+
+function emptyParsedArgs(): ParsedArgs {
+  return {
+    command: "daemon",
+    positionals: [],
+    json: false,
+    inPlace: false,
+    livePatchSave: true,
+    preserveThumbnail: false,
+    includeUnsupported: false,
+    daemonSkipBuild: false,
+    daemonNoAuth: false,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+async function discoverTargets(args: ParsedArgs): Promise<TargetInfo[]> {
+  const targets = new Map<string, TargetInfo>();
+  const addTarget = (target: TargetInfo) => {
+    const key = target.url ?? `${target.kind}:${target.id}`;
+    targets.set(key, target);
+  };
+
+  if (args.serverUrl || process.env.PROJECT_GRAPH_SERVER_URL) {
+    addTarget(await targetFromUrl(serverBaseUrl(args), args, "configured"));
+  }
+
+  for (const entry of await readBackendRegistry()) {
+    const url = entry.url ?? entry.localUrl;
+    if (!url) {
+      continue;
+    }
+    addTarget(await targetFromRegistryEntry(entry));
+  }
+
+  const liveSession = await readLiveSession(false, args);
+  if (liveSession) {
+    addTarget({
+      id: liveSession.id,
+      kind: "live",
+      url: `tcp://127.0.0.1:${liveSession.port}`,
+      reachable: true,
+      registryPath: liveSession.registryPath,
+      pid: liveSession.pid,
+      port: liveSession.port,
+      source: "live-registry",
+      capabilities: {
+        query: true,
+        patch: true,
+        export: true,
+        validate: false,
+        import: false,
+        events: false,
+      },
+    });
+  }
+
+  return Array.from(targets.values()).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function targetFromUrl(url: string, args: ParsedArgs, source: string): Promise<TargetInfo> {
+  const target: TargetInfo = {
+    id: targetIdFromUrl(url),
+    kind: isLocalBackendUrl(url) ? "daemon" : "lan",
+    url,
+    source,
+    reachable: await testBackendHealth(url),
+  };
+  try {
+    const info = await fetchServerInfo({ ...args, serverUrl: url });
+    applyServerInfo(target, info);
+  } catch (error) {
+    target.infoError = error instanceof Error ? error.message : String(error);
+  }
+  return target;
+}
+
+async function targetFromRegistryEntry(entry: BackendRegistryEntry): Promise<TargetInfo> {
+  const url = entry.url ?? entry.localUrl;
+  if (!url) {
+    throw new Error("Backend registry entry is missing url.");
+  }
+  return {
+    id: entry.id ?? targetIdFromUrl(url),
+    kind: entry.kind === "lan" ? "lan" : "daemon",
+    url,
+    localUrl: entry.localUrl,
+    lanUrl: entry.lanUrl,
+    apiVersion: entry.apiVersion,
+    authMode: entry.authMode,
+    authUser: entry.authUser,
+    lanMode: entry.lanMode,
+    dataDirName: entry.dataDirName,
+    localDataDir: entry.localDataDir,
+    capabilities: entry.capabilities,
+    reachable: await testBackendHealth(url),
+    registryPath: backendRegistryPath(),
+    port: entry.port,
+    source: "backend-registry",
+  };
+}
+
+function applyServerInfo(target: TargetInfo, info: ServerInfoResponse): void {
+  target.apiVersion = info.apiVersion;
+  target.authMode = info.authMode ?? (info.authEnabled ? "basic" : "none");
+  target.lanMode = info.lanMode;
+  target.dataDirName = info.dataDirName;
+  target.capabilities = info.capabilities;
+  target.port = info.port;
+}
+
+async function fetchServerInfo(args: ParsedArgs): Promise<ServerInfoResponse> {
+  return sendServerJsonRequest<ServerInfoResponse>("GET", "/api/server-info", args);
+}
+
+async function testBackendHealth(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(new URL("/api/health", `${baseUrl}/`), {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const data = asRecord(await response.json());
+    return data.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function readBackendRegistry(): Promise<BackendRegistryEntry[]> {
+  let content: string;
+  try {
+    content = await readFile(backendRegistryPath(), "utf8");
+  } catch {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripBom(content)) as unknown;
+  } catch {
+    return [];
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.map((entry) => asRecord(entry) as BackendRegistryEntry);
+  }
+  const record = asRecord(parsed);
+  return Array.isArray(record.targets)
+    ? record.targets.map((entry) => asRecord(entry) as BackendRegistryEntry)
+    : [record as BackendRegistryEntry];
+}
+
+function backendRegistryPath(): string {
+  return process.env.PROJECT_GRAPH_BACKEND_REGISTRY || join(tmpdir(), "project-graph-backends.json");
+}
+
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
+function targetIdFromUrl(value: string): string {
+  const url = new URL(value);
+  return `${isLocalBackendUrl(value) ? "local" : "lan"}-${normalizedHostname(url)}-${url.port || defaultPortForUrl(url)}`;
+}
+
+function defaultPortForUrl(url: URL): string {
+  return url.protocol === "https:" ? "443" : "80";
+}
+
+function isLocalBackendUrl(value: string): boolean {
+  const url = new URL(value);
+  const hostname = normalizedHostname(url);
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+function normalizedHostname(url: URL): string {
+  return url.hostname.replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function printTargets(targets: TargetInfo[]): void {
+  for (const target of targets) {
+    const status = target.reachable === false ? "unreachable" : "reachable";
+    const version = target.apiVersion ? ` api=${target.apiVersion}` : "";
+    const auth = target.authMode ? ` auth=${target.authMode}` : "";
+    console.log(`${target.id} ${target.kind} ${target.url ?? ""} ${status}${version}${auth}`);
+  }
+  console.log(`total: ${targets.length}`);
+}
+
+function printDaemonStatus(info: ServerInfoResponse & { url: string }): void {
+  console.log(`url: ${info.url}`);
+  console.log(`api version: ${info.apiVersion ?? "unknown"}`);
+  console.log(`auth: ${info.authMode ?? (info.authEnabled ? "basic" : "none")}`);
+  console.log(`lan mode: ${info.lanMode ? "enabled" : "disabled"}`);
+  if (info.dataDirName) {
+    console.log(`data: ${info.dataDirName}`);
+  }
+  if (info.capabilities) {
+    const enabled = Object.entries(info.capabilities)
+      .filter(([, value]) => value)
+      .map(([key]) => key)
+      .sort();
+    console.log(`capabilities: ${enabled.join(", ")}`);
+  }
 }
 
 interface ServerRetryAdvice {
