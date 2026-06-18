@@ -23,6 +23,7 @@ backup_*
 .DS_Store
 
 server/data/
+server/web-runtime.json
 server/*.log
 web-backups/
 

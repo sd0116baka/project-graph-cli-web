@@ -3,12 +3,14 @@ param(
   [switch]$SkipBuild,
   [switch]$NoAuth,
   [string]$AuthUser = "pg",
-  [string]$AuthPassword = ""
+  [string]$AuthPassword = "",
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 Set-Location $Root
 
@@ -97,7 +99,8 @@ if (-not (Test-Path $IndexHtml)) {
   throw "Missing app/dist/index.html. Run pnpm run web:build first."
 }
 
-$DataDir = Join-Path $Root "server\data"
+$DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
+Assert-SafeWebDataDir -Root $Root -DataDir $DataDir
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 $AuthPath = Join-Path $DataDir "auth.json"
 
@@ -148,5 +151,7 @@ if (-not $NoAuth) {
 Write-Host ""
 Write-Host "Keep this window open. Press Ctrl+C to stop."
 Write-Host ""
+
+Write-WebRuntime -Root $Root -DataDir $DataDir -StaticDir $DistDir -Port $SelectedPort -AuthEnabled (-not $NoAuth) -AuthUser $AuthUser
 
 node server/src/server.js

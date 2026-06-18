@@ -1,12 +1,15 @@
 param(
-  [int]$Port = 37820
+  [int]$Port = 37820,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$AuthPath = Join-Path $Root "server\data\auth.json"
+$DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
+$AuthPath = Join-Path $DataDir "auth.json"
 $Base = "http://127.0.0.1:$Port"
 
 function Get-AuthHeaders {

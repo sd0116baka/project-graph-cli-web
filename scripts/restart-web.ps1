@@ -1,6 +1,7 @@
 param(
   [int]$Port = 37820,
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,9 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ArgsList = @("-File", (Join-Path $ScriptDir "start-web.ps1"), "-Port", [string]$Port)
 if ($SkipBuild) {
   $ArgsList += "-SkipBuild"
+}
+if ($DataDir) {
+  $ArgsList += @("-DataDir", $DataDir)
 }
 
 & powershell -NoProfile -ExecutionPolicy Bypass @ArgsList

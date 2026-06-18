@@ -1,13 +1,15 @@
 param(
   [int]$PortStart = 37820,
-  [int]$PortEnd = 37920
+  [int]$PortEnd = 37920,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$DataDir = Join-Path $Root "server\data"
+$DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 $AuthPath = Join-Path $DataDir "auth.json"
 
 function Get-LanIp {

@@ -3,15 +3,17 @@ param(
   [string]$BackupPath,
   [switch]$ValidateOnly,
   [switch]$Restart,
-  [int]$Port = 37820
+  [int]$Port = 37820,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 $ServerDir = Join-Path $Root "server"
-$DataDir = Join-Path $ServerDir "data"
+$DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 $BackupFullPath = (Resolve-Path $BackupPath).Path
 $TempDir = Join-Path $env:TEMP "project-graph-web-restore-$([guid]::NewGuid().ToString('N'))"
 
@@ -23,8 +25,8 @@ function Assert-PathInside([string]$Parent, [string]$Child) {
   }
 }
 
-Assert-PathInside $Root $DataDir
 Assert-PathInside $Root $ServerDir
+Assert-SafeWebDataDir -Root $Root -DataDir $DataDir
 
 try {
   New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
@@ -46,7 +48,7 @@ try {
   }
 
   if (Test-Path $DataDir) {
-    & (Join-Path $ScriptDir "backup-data.ps1") -Keep 10 | Out-Null
+    & (Join-Path $ScriptDir "backup-data.ps1") -Keep 10 -DataDir $DataDir | Out-Null
   }
 
   & (Join-Path $ScriptDir "stop-web.ps1") | Out-Null
@@ -68,5 +70,5 @@ try {
 }
 
 if ($Restart) {
-  & (Join-Path $ScriptDir "start-web.ps1") -SkipBuild -Port $Port
+  & (Join-Path $ScriptDir "start-web.ps1") -SkipBuild -Port $Port -DataDir $DataDir
 }

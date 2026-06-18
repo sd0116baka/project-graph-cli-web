@@ -1,13 +1,15 @@
 param(
   [string]$BackupDir = "",
-  [int]$Keep = 10
+  [int]$Keep = 10,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "web-paths.ps1")
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$DataDir = Join-Path $Root "server\data"
+$DataDir = Resolve-WebDataDir -Root $Root -DataDir $DataDir
 
 if (-not $BackupDir) {
   $BackupDir = Join-Path $Root "web-backups"
@@ -55,4 +57,5 @@ if ($Keep -gt 0) {
 }
 
 Write-Host "Backup created: $ZipPath"
+Write-Host "Source data directory: $DataDir"
 Write-Output $ZipPath
