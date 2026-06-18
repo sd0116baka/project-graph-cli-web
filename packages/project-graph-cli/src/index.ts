@@ -135,6 +135,8 @@ Environment:
   PROJECT_GRAPH_ROOT             Repository root used by daemon script wrappers.
 `;
 
+const supportedBackendApiVersion = "0.1";
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   let args: ParsedArgs;
   try {
@@ -740,6 +742,18 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
     console.log(helpText);
     return 0;
   }
+  const knownSubcommands = new Set(["list", "query", "patch", "export", "validate", "import", "wait"]);
+  if (!knownSubcommands.has(subcommand)) {
+    throw new ProjectGraphServerError(
+      0,
+      "invalid_cli_arguments",
+      `Unknown server subcommand: ${subcommand}`,
+      undefined,
+    );
+  }
+  if (subcommand !== "wait" || (args.positionals[1] ?? "ready") !== "ready") {
+    await assertServerApiCompatible(args);
+  }
 
   if (subcommand === "list") {
     const response = await sendServerJsonRequest<{ projects: ServerProject[] }>("GET", "/api/projects", args);
@@ -889,7 +903,7 @@ async function runServerCommand(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  throw new Error(`Unknown server subcommand: ${subcommand}`);
+  throw new ProjectGraphServerError(0, "invalid_cli_arguments", `Unknown server subcommand: ${subcommand}`, undefined);
 }
 
 async function waitForServerReady(args: ParsedArgs): Promise<{ ok: true; url: string; elapsedMs: number }> {
@@ -1354,6 +1368,30 @@ async function fetchServerInfo(args: ParsedArgs): Promise<ServerInfoResponse> {
   return sendServerJsonRequest<ServerInfoResponse>("GET", "/api/server-info", args);
 }
 
+async function assertServerApiCompatible(args: ParsedArgs): Promise<void> {
+  let info;
+  try {
+    info = await fetchServerInfo(args);
+  } catch (error) {
+    if (error instanceof ProjectGraphServerError && error.status === 404) {
+      return;
+    }
+    throw error;
+  }
+  if (info.apiVersion !== supportedBackendApiVersion) {
+    throw new ProjectGraphServerError(
+      0,
+      "api_version_mismatch",
+      "Project Graph backend API version is not supported by this CLI.",
+      {
+        expectedApiVersion: supportedBackendApiVersion,
+        actualApiVersion: info.apiVersion ?? "unknown",
+        url: serverBaseUrl(args),
+      },
+    );
+  }
+}
+
 async function testBackendHealth(baseUrl: string): Promise<boolean> {
   try {
     const response = await fetch(new URL("/api/health", `${baseUrl}/`), {
@@ -1506,6 +1544,9 @@ function serverRetryAdvice(status: number, code: string): ServerRetryAdvice {
   }
   if (code === "server_unreachable") {
     return { action: "retry_later", retryable: true };
+  }
+  if (code === "api_version_mismatch") {
+    return { action: "check_target", retryable: false };
   }
   if (code === "invalid_server_response" || code === "invalid_project_blob") {
     return { action: "inspect_error", retryable: false };

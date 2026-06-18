@@ -18,6 +18,7 @@ The upstream desktop product remains documented in [app/README.md](app/README.md
 
 The backend-first convergence plan is documented in [docs/backend-first-architecture.md](docs/backend-first-architecture.md).
 Distribution and portable preview packaging are documented in [docs/distribution.md](docs/distribution.md).
+Backend security and compatibility gates are documented in [docs/security.md](docs/security.md).
 
 ## Development Setup
 

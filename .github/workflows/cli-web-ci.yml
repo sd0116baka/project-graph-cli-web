@@ -95,6 +95,10 @@ jobs:
         shell: powershell
         run: .\scripts\package-portable.ps1 -SkipBuild
 
+      - name: Check release readiness
+        shell: powershell
+        run: .\scripts\check-release-readiness.ps1
+
       - name: Upload portable preview
         uses: actions/upload-artifact@v4
         with:

@@ -817,6 +817,23 @@ describe("@graphif/project-graph-cli", () => {
     });
   });
 
+  it("rejects unknown Web backend subcommands before contacting the backend", async () => {
+    const server = await startHttpServer(() => {
+      throw new Error("unknown server subcommands should not contact the backend");
+    });
+
+    const result = await runCli(["server", "missing", "--url", `http://127.0.0.1:${server.port}`, "--json"]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(server.requests).toHaveLength(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: "invalid_cli_arguments",
+      error: "Unknown server subcommand: missing",
+      retry: { action: "fix_request", retryable: false },
+    });
+  });
+
   it("prints structured JSON when the Web backend is unreachable", async () => {
     const closedServer = createHttpServer();
     await new Promise<void>((resolvePromise) => {
@@ -872,6 +889,28 @@ describe("@graphif/project-graph-cli", () => {
       etag: '"etag-invalid"',
       revisionToken: '"etag-invalid"',
       issues: [{ code: "invalid_archive" }],
+    });
+  });
+
+  it("rejects incompatible Web backend API versions", async () => {
+    const server = await startHttpServer((request) => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/api/server-info") {
+        return { body: { ok: true, apiVersion: "9.0" } };
+      }
+      if (request.method === "GET" && url.pathname === "/api/projects") {
+        throw new Error("project list should not be called after an API mismatch");
+      }
+      return { status: 404, body: { ok: false, code: "not_found", error: "Not found" } };
+    });
+
+    const result = await runCli(["server", "list", "--url", `http://127.0.0.1:${server.port}`, "--json"]);
+
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: "api_version_mismatch",
+      details: { expectedApiVersion: "0.1", actualApiVersion: "9.0" },
     });
   });
 

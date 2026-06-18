@@ -160,6 +160,44 @@ describe("@graphif/project-graph-web-server", () => {
     });
   });
 
+  it("restores a valid backup after a corrupt project write", async () => {
+    const server = await startServer();
+    const projectId = await createProject(server);
+    const originalEtag = await putArchive(server, projectId, createArchiveWithThumbnail());
+    await fetch(urlFor(server, `/api/projects/${projectId}/blob`), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/vnd.project-graph",
+        "If-Match": originalEtag,
+        "X-Project-Graph-Client": "server-test",
+      },
+      body: Buffer.from("not-a-prg"),
+    });
+
+    const corruptValidation = await requestJson(server, `/api/projects/${projectId}/validate`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const history = await requestJson(server, `/api/projects/${projectId}/history`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const restored = await requestJson(
+      server,
+      `/api/projects/${projectId}/restore/${history.body.history[0].revision}`,
+      {
+        method: "POST",
+        headers: { "X-Project-Graph-Client": "server-test" },
+      },
+    );
+    const restoredValidation = await requestJson(server, `/api/projects/${projectId}/validate`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+
+    expect(corruptValidation.body).toMatchObject({ ok: false, issues: [{ code: "invalid_project_blob" }] });
+    expect(history.body.history.length).toBeGreaterThan(0);
+    expect(restored.response.status).toBe(200);
+    expect(restoredValidation.body).toMatchObject({ ok: true, issues: [] });
+  });
+
   it("rejects invalid import payloads as request errors", async () => {
     const server = await startServer();
     const invalidPgJson = await requestJson(server, "/api/projects/import", {
