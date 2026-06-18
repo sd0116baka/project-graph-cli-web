@@ -62,6 +62,22 @@ export namespace ServerProjectManager {
     source?: string;
   };
 
+  export type BackendStartOptions = {
+    port?: number;
+    dataDir?: string;
+    noAuth?: boolean;
+    skipBuild?: boolean;
+    localOnly?: boolean;
+    logPath?: string;
+  };
+
+  export type BackendStartResult = {
+    ok: true;
+    pid: number;
+    script: string;
+    logPath: string;
+  };
+
   export type ServerProjectErrorDetail = {
     status: number;
     code?: string;
@@ -92,7 +108,10 @@ export namespace ServerProjectManager {
 
   const clientIdStorageKey = "project-graph-web-client-id";
   const clientNameStorageKey = "project-graph-web-client-name";
+  const backendUrlStorageKey = "project-graph-backend-url";
   const projectEtags = new Map<string, string>();
+  let activeServerBaseUrl: string | undefined;
+  let backendConnectionPromise: Promise<string> | undefined;
 
   export function projectUri(id: string): URI {
     return URI.parse(`server:/projects/${encodeURIComponent(id)}`);
@@ -129,6 +148,100 @@ export namespace ServerProjectManager {
     }
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<BackendTarget[]>("project_graph_backend_targets");
+  }
+
+  export async function startBackendDaemon(options: BackendStartOptions = {}): Promise<BackendStartResult> {
+    if (!isTauriRuntime()) {
+      throwProjectError({
+        status: 0,
+        code: "backend_start_unavailable",
+        message: "当前环境不能启动本机后端",
+        recovery: "请在桌面版中启动本机后端，或手动运行 scripts/start-web.ps1 后填写后端地址。",
+        path: "",
+      });
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<BackendStartResult>("project_graph_backend_start", { options });
+  }
+
+  export async function ensureBackendConnection(): Promise<string> {
+    const configured = serverBaseUrl();
+    if (configured) return configured;
+    if (!isTauriRuntime()) {
+      return typeof window !== "undefined" ? window.location.origin : "";
+    }
+    if (!backendConnectionPromise) {
+      backendConnectionPromise = discoverAndSelectBackend().finally(() => {
+        backendConnectionPromise = undefined;
+      });
+    }
+    return backendConnectionPromise;
+  }
+
+  export function getServerBaseUrl(): string {
+    return serverBaseUrl();
+  }
+
+  export function setServerBaseUrl(url: string): string {
+    const next = normalizeBackendUrl(url);
+    activeServerBaseUrl = next;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(backendUrlStorageKey, next);
+    }
+    return next;
+  }
+
+  export async function connectServerBaseUrl(url: string): Promise<string> {
+    const next = normalizeBackendUrl(url);
+    const health = await probeBackend(next);
+    if (!health.ok) {
+      throwProjectError({
+        status: 0,
+        code: "backend_unreachable",
+        message: "无法连接 Project Graph 后端",
+        recovery: "请确认后端地址、端口和认证状态正确，然后重试。",
+        path: "/api/server-info",
+        details: { url: next, error: health.error },
+      });
+    }
+    return setServerBaseUrl(next);
+  }
+
+  export async function waitForBackendConnection(timeoutMs = 60000): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "";
+    while (Date.now() < deadline) {
+      const targets = await discoverBackendTargets();
+      for (const target of targets) {
+        const url = backendTargetUrl(target);
+        if (!url) continue;
+        const health = await probeBackend(url);
+        if (health.ok) {
+          return setServerBaseUrl(url);
+        }
+        lastError = health.error;
+      }
+      await delay(500);
+    }
+    throwProjectError({
+      status: 0,
+      code: "backend_start_timeout",
+      message: "本机后端启动超时",
+      recovery: "请查看后端启动日志，确认 Node、pnpm 和构建产物是否可用。",
+      path: "/api/server-info",
+      details: { lastError },
+    });
+  }
+
+  export function clearServerBaseUrl(): void {
+    activeServerBaseUrl = undefined;
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(backendUrlStorageKey);
+    }
+  }
+
+  export function backendTargetUrl(target: BackendTarget): string {
+    return target.localUrl || target.url || target.lanUrl || "";
   }
 
   export async function createProject(name: string): Promise<ServerProject> {
@@ -171,6 +284,7 @@ export namespace ServerProjectManager {
   }
 
   export async function projectBlobExists(id: string): Promise<boolean> {
+    await ensureBackendConnection();
     const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(id)}/blob`), {
       method: "HEAD",
       headers: clientHeaders(),
@@ -276,6 +390,7 @@ export namespace ServerProjectManager {
   }
 
   async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    await ensureBackendConnection();
     const headers = new Headers(init.headers);
     for (const [key, value] of Object.entries(clientHeaders())) {
       headers.set(key, value);
@@ -293,10 +408,16 @@ export namespace ServerProjectManager {
     if (base) {
       return `${base}${path}`;
     }
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && !isTauriRuntime()) {
       return new URL(path, window.location.origin).toString();
     }
-    return path;
+    throwProjectError({
+      status: 0,
+      code: "backend_unconfigured",
+      message: "没有可用的 Project Graph 后端",
+      recovery: "先启动本机后端，或输入已经运行的后端地址后重试。",
+      path,
+    });
   }
 
   function isTauriRuntime(): boolean {
@@ -304,7 +425,17 @@ export namespace ServerProjectManager {
   }
 
   function serverBaseUrl(): string {
-    return import.meta.env.LR_PROJECT_GRAPH_SERVER_URL?.replace(/\/$/, "") ?? "";
+    if (activeServerBaseUrl) return activeServerBaseUrl;
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(backendUrlStorageKey);
+      if (stored) return stored;
+    }
+    const envUrl = import.meta.env.LR_PROJECT_GRAPH_SERVER_URL?.replace(/\/$/, "") ?? "";
+    if (envUrl) return envUrl;
+    if (typeof window !== "undefined" && !isTauriRuntime()) {
+      return window.location.origin;
+    }
+    return "";
   }
 
   function updateProjectEtag(id: string, response: Response): void {
@@ -347,12 +478,96 @@ export namespace ServerProjectManager {
       recovery = "请使用启动脚本输出的账号密码访问 Web 页面，或检查浏览器是否仍保留认证状态。";
     }
     const detail = { status: response.status, code, message, recovery, path, details };
-    dispatchServerError(detail);
-    throw new ServerProjectError(detail);
+    throwProjectError(detail);
   }
 
   function dispatchServerError(detail: ServerProjectErrorDetail): void {
     if (typeof window === "undefined") return;
     window.dispatchEvent(new CustomEvent<ServerProjectErrorDetail>(errorEventName, { detail }));
+  }
+
+  async function discoverAndSelectBackend(): Promise<string> {
+    const targets = await discoverBackendTargets();
+    let lastError = "";
+    for (const target of targets) {
+      const url = backendTargetUrl(target);
+      if (!url) continue;
+      const health = await probeBackend(url);
+      if (health.ok) {
+        return setServerBaseUrl(url);
+      }
+      lastError = health.error;
+    }
+    throwProjectError({
+      status: 0,
+      code: "backend_not_found",
+      message: "没有发现正在运行的 Project Graph 后端",
+      recovery: "点击启动本机后端，或在地址栏输入 http://127.0.0.1:<端口> 后连接。",
+      path: "/api/server-info",
+      details: { targets, lastError },
+    });
+  }
+
+  async function probeBackend(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      const parsed = parseBackendUrl(url);
+      if (!parsed.ok) {
+        return { ok: false, error: parsed.error };
+      }
+      const base = parsed.url;
+      const response = await fetch(`${base}/api/server-info`, { headers: clientHeaders() });
+      if (!response.ok) {
+        return { ok: false, error: `${response.status} ${response.statusText}` };
+      }
+      const data = (await response.json()) as { ok?: boolean };
+      return data.ok ? { ok: true } : { ok: false, error: "后端状态响应不是 ok" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  function normalizeBackendUrl(url: string): string {
+    const parsed = parseBackendUrl(url);
+    if (parsed.ok) return parsed.url;
+    if (parsed.error === "empty") {
+      throwProjectError({
+        status: 0,
+        code: "backend_url_required",
+        message: "后端地址不能为空",
+        recovery: "请输入类似 http://127.0.0.1:37820 的后端地址。",
+        path: "",
+      });
+    }
+    throwProjectError({
+      status: 0,
+      code: "invalid_backend_url",
+      message: "后端地址格式不正确",
+      recovery: "请输入完整地址，例如 http://127.0.0.1:37820。",
+      path: "",
+      details: { url },
+    });
+  }
+
+  function parseBackendUrl(url: string): { ok: true; url: string } | { ok: false; error: string } {
+    const trimmed = url.trim().replace(/\/$/, "");
+    if (!trimmed) return { ok: false, error: "empty" };
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { ok: false, error: "unsupported_protocol" };
+      }
+      return { ok: true, url: parsed.toString().replace(/\/$/, "") };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  function throwProjectError(detail: ServerProjectErrorDetail): never {
+    dispatchServerError(detail);
+    throw new ServerProjectError(detail);
+  }
+
+  async function delay(ms: number): Promise<void> {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
   }
 }

@@ -5,8 +5,10 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import { onNewServerProject, onOpenServerProject } from "@/core/service/GlobalMenu";
+import { isWeb } from "@/utils/platform";
 import {
   AlertTriangle,
+  Cable,
   FolderOpen,
   HardDrive,
   History,
@@ -14,6 +16,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  Power,
   RefreshCw,
   RotateCcw,
   Server,
@@ -26,12 +29,17 @@ export function ServerProjectBrowser() {
   const [projects, setProjects] = useState<ServerProjectManager.ServerProject[]>([]);
   const [history, setHistory] = useState<ServerProjectManager.ProjectHistoryEntry[]>([]);
   const [serverInfo, setServerInfo] = useState<ServerProjectManager.ServerInfo | undefined>();
+  const [backendTargets, setBackendTargets] = useState<ServerProjectManager.BackendTarget[]>([]);
+  const [activeBackendUrl, setActiveBackendUrl] = useState(ServerProjectManager.getServerBaseUrl());
+  const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
   const [lastFailure, setLastFailure] = useState<ServerProjectManager.ServerProjectErrorDetail | undefined>();
   const [projectName, setProjectName] = useState("");
   const [historyProjectId, setHistoryProjectId] = useState("");
   const [busyProjectId, setBusyProjectId] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isStartingBackend, setIsStartingBackend] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
@@ -50,6 +58,10 @@ export function ServerProjectBrowser() {
   async function refreshProjects() {
     setIsRefreshing(true);
     try {
+      const backendUrl = await ServerProjectManager.ensureBackendConnection();
+      setActiveBackendUrl(backendUrl);
+      setBackendUrlInput(backendUrl);
+      await refreshBackendTargets();
       const nextProjects = await ServerProjectManager.listProjects();
       setProjects(nextProjects);
       setLastFailure(undefined);
@@ -66,6 +78,50 @@ export function ServerProjectBrowser() {
       reportFailure(error, "读取服务器项目失败");
     } finally {
       setIsRefreshing(false);
+    }
+  }
+
+  async function refreshBackendTargets() {
+    const targets = await ServerProjectManager.discoverBackendTargets();
+    setBackendTargets(targets);
+  }
+
+  async function connectBackend(url = backendUrlInput) {
+    setIsConnecting(true);
+    try {
+      const next = await ServerProjectManager.connectServerBaseUrl(url);
+      setActiveBackendUrl(next);
+      setBackendUrlInput(next);
+      await refreshProjects();
+      toast.success("已连接 Project Graph 后端");
+    } catch (error) {
+      reportFailure(error, "连接后端失败");
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  async function connectBackendTarget(target: ServerProjectManager.BackendTarget) {
+    const url = ServerProjectManager.backendTargetUrl(target);
+    if (!url) return;
+    await connectBackend(url);
+  }
+
+  async function startLocalBackend() {
+    setIsStartingBackend(true);
+    try {
+      ServerProjectManager.clearServerBaseUrl();
+      const started = await ServerProjectManager.startBackendDaemon({ noAuth: true, localOnly: true });
+      toast.info("本机后端正在启动");
+      const backendUrl = await ServerProjectManager.waitForBackendConnection();
+      setActiveBackendUrl(backendUrl);
+      setBackendUrlInput(backendUrl);
+      await refreshProjects();
+      toast.success(`本机后端已启动，日志：${started.logPath}`);
+    } catch (error) {
+      reportFailure(error, "启动本机后端失败");
+    } finally {
+      setIsStartingBackend(false);
     }
   }
 
@@ -206,7 +262,7 @@ export function ServerProjectBrowser() {
         <div className="text-muted-foreground grid gap-1 text-xs">
           <div className="flex min-w-0 items-center gap-2">
             <Server />
-            <span className="truncate">{serverInfo?.serverUrl || "正在读取后端地址"}</span>
+            <span className="truncate">{serverInfo?.serverUrl || activeBackendUrl || "未连接后端"}</span>
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <HardDrive />
@@ -223,6 +279,59 @@ export function ServerProjectBrowser() {
             </span>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <Input
+            value={backendUrlInput}
+            placeholder="http://127.0.0.1:37820"
+            onChange={(event) => setBackendUrlInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void connectBackend();
+              }
+            }}
+          />
+          <Button
+            size="icon"
+            variant="outline"
+            title="连接后端"
+            disabled={isConnecting}
+            onClick={() => void connectBackend()}
+          >
+            {isConnecting ? <LoaderCircle className="animate-spin" /> : <Cable />}
+          </Button>
+          {!isWeb && (
+            <Button
+              size="icon"
+              variant="outline"
+              title="启动本机后端"
+              disabled={isStartingBackend}
+              onClick={() => void startLocalBackend()}
+            >
+              {isStartingBackend ? <LoaderCircle className="animate-spin" /> : <Power />}
+            </Button>
+          )}
+        </div>
+        {backendTargets.length > 0 && (
+          <div className="flex max-h-20 flex-col gap-1 overflow-auto">
+            {backendTargets.map((target, index) => {
+              const targetUrl = ServerProjectManager.backendTargetUrl(target);
+              if (!targetUrl) return null;
+              return (
+                <button
+                  key={`${target.id ?? targetUrl}:${index}`}
+                  type="button"
+                  className="hover:bg-accent flex min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-xs"
+                  onClick={() => void connectBackendTarget(target)}
+                >
+                  <Server className="size-3.5 shrink-0" />
+                  <span className="truncate">{targetUrl}</span>
+                  {target.authMode && <Badge variant="outline">{target.authMode}</Badge>}
+                  {target.lanMode && <Badge variant="secondary">LAN</Badge>}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       {lastFailure && (
         <Alert variant="destructive">

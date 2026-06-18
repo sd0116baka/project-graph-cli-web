@@ -165,7 +165,7 @@ export default function WelcomePage() {
         {/* 底部区域 */}
         <div className="flex sm:gap-16">
           <div className="flex flex-col sm:gap-8">
-            {isWeb && <ServerProjectBrowser />}
+            <ServerProjectBrowser />
             {/* 常用操作 宫格区 */}
             {!isWeb && (
               <div className="grid grid-cols-2 grid-rows-2 *:flex *:w-max *:cursor-pointer *:items-center *:gap-2 *:hover:opacity-75 *:active:scale-90 sm:gap-2 sm:gap-x-4">
