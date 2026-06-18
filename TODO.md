@@ -32,6 +32,7 @@ Fork: `sd0116baka/project-graph-cli-web`
 - [x] `P3-3` Cover unauthenticated access, bad credentials, lock conflicts, and ETag conflicts.
 - [x] `P3-4` Cover invalid patch payload rejection and backup creation before writes.
 - [x] `P3-5` Add CLI server command smoke coverage against a temporary local server.
+- [x] `P3-6` Cover thumbnail preservation and concurrent patch conflicts in the real Web server process.
 
 ## Phase 4 - Web User Experience
 

@@ -25,6 +25,7 @@ const port = Number(process.env.PORT ?? process.env.PG_WEB_PORT ?? 37820);
 const host = process.env.HOST ?? process.env.PG_WEB_HOST ?? "0.0.0.0";
 const authUser = process.env.PG_WEB_AUTH_USER ?? "pg";
 const authPassword = process.env.PG_WEB_AUTH_PASSWORD ?? "";
+const projectMutationQueues = new Map();
 
 await ensureLayout();
 
@@ -60,7 +61,13 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = Number(error?.statusCode ?? 500);
-    sendError(res, Number.isInteger(statusCode) ? statusCode : 500, error?.code ?? "internal_error", message);
+    sendError(
+      res,
+      Number.isInteger(statusCode) ? statusCode : 500,
+      error?.code ?? "internal_error",
+      message,
+      error?.details,
+    );
   }
 });
 
@@ -110,12 +117,13 @@ async function handleApi(req, res, requestUrl) {
     }
 
     if (segments.length === 3 && req.method === "DELETE") {
-      const lock = await getActiveLock(id);
-      if (lock && lock.clientId !== clientId) {
-        sendJson(res, 423, { error: "Project is locked by another client", lock });
-        return;
-      }
-      await removeProject(id);
+      await runProjectMutation(id, async () => {
+        const lock = await getActiveLock(id);
+        if (lock && lock.clientId !== clientId) {
+          throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
+        }
+        await removeProject(id);
+      });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -126,19 +134,16 @@ async function handleApi(req, res, requestUrl) {
         return;
       }
       if (req.method === "PUT") {
-        const lock = await getActiveLock(id);
-        if (lock && lock.clientId !== clientId) {
-          sendJson(res, 423, { error: "Project is locked by another client", lock });
-          return;
-        }
         const content = await readBinary(req);
-        const currentEtag = await getProjectEtag(id);
         const ifMatch = req.headers["if-match"];
-        if (ifMatch && currentEtag && !etagMatches(ifMatch, currentEtag)) {
-          sendJson(res, 412, { error: "Project revision does not match", currentEtag });
-          return;
-        }
-        const etag = await writeProjectBlob(id, content);
+        const etag = await runProjectMutation(id, async () => {
+          const lock = await getActiveLock(id);
+          if (lock && lock.clientId !== clientId) {
+            throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
+          }
+
+          return writeProjectBlob(id, content, { expectedEtag: ifMatch });
+        });
         res.setHeader("ETag", etag);
         sendJson(res, 200, { ok: true, etag });
         return;
@@ -215,31 +220,40 @@ async function handleApi(req, res, requestUrl) {
         return;
       }
 
-      const { archive, etag: currentEtag } = await readProjectArchive(id);
       const ifMatch = req.headers["if-match"];
-      if (ifMatch && !etagMatches(ifMatch, currentEtag)) {
-        sendError(res, 412, "etag_mismatch", "Project revision does not match", { currentEtag });
-        return;
-      }
+      const response = await runProjectMutation(id, async () => {
+        const lock = await getActiveLock(id);
+        if (lock && lock.clientId !== clientId) {
+          throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
+        }
 
-      const result = applyOperationsToArchive(archive, patch);
-      const content = Buffer.from(
-        await writePrgData(result.archive, { preserveExtraEntries: true, preserveThumbnail: false }),
-      );
-      const etag = await writeProjectBlob(id, content);
+        const { archive, etag: currentEtag } = await readProjectArchive(id);
+        if (ifMatch && !etagMatches(ifMatch, currentEtag)) {
+          throw createHttpError("Project revision does not match", 412, "etag_mismatch", { currentEtag });
+        }
+
+        const result = applyOperationsToArchive(archive, patch);
+        const content = Buffer.from(
+          await writePrgData(result.archive, { preserveExtraEntries: true, preserveThumbnail: true }),
+        );
+        const etag = await writeProjectBlob(id, content, { expectedEtag: ifMatch });
+        return { etag, changed: result.changed, warnings: result.warnings };
+      });
+      const { etag, changed, warnings } = response;
       res.setHeader("ETag", etag);
-      sendJson(res, 200, { ok: true, etag, changed: result.changed, warnings: result.warnings });
+      sendJson(res, 200, { ok: true, etag, changed, warnings });
       return;
     }
 
     if (segments.length === 5 && segments[3] === "restore" && req.method === "POST") {
       const revision = normalizeRevisionName(segments[4]);
-      const lock = await getActiveLock(id);
-      if (lock && lock.clientId !== clientId) {
-        sendJson(res, 423, { error: "Project is locked by another client", lock });
-        return;
-      }
-      const etag = await restoreProjectRevision(id, revision);
+      const etag = await runProjectMutation(id, async () => {
+        const lock = await getActiveLock(id);
+        if (lock && lock.clientId !== clientId) {
+          throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
+        }
+        return restoreProjectRevision(id, revision);
+      });
       res.setHeader("ETag", etag);
       sendJson(res, 200, { ok: true, etag });
       return;
@@ -376,10 +390,16 @@ async function readProjectArchive(id) {
   };
 }
 
-async function writeProjectBlob(id, content) {
+async function writeProjectBlob(id, content, options = {}) {
   await ensureProjectMetadata(id);
   const filePath = projectFilePath(id);
   const existing = await fs.readFile(filePath).catch(() => null);
+  if (options.expectedEtag !== undefined) {
+    const currentEtag = existing ? etagForBuffer(existing) : null;
+    if (!currentEtag || !etagMatches(options.expectedEtag, currentEtag)) {
+      throw createHttpError("Project revision does not match", 412, "etag_mismatch", { currentEtag });
+    }
+  }
   if (existing) {
     await writeBackup(id, existing);
   }
@@ -447,6 +467,26 @@ async function restoreProjectRevision(id, revision) {
   await ensureProjectMetadata(id);
   const content = await fs.readFile(path.join(backupsDir, id, revision));
   return writeProjectBlob(id, content);
+}
+
+async function runProjectMutation(id, task) {
+  const previous = projectMutationQueues.get(id) ?? Promise.resolve();
+  let release;
+  const currentSlot = new Promise((resolve) => {
+    release = resolve;
+  });
+  const current = previous.then(() => currentSlot);
+  projectMutationQueues.set(id, current);
+
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+    if (projectMutationQueues.get(id) === current) {
+      projectMutationQueues.delete(id);
+    }
+  }
 }
 
 async function getProjectEtag(id) {
@@ -703,6 +743,16 @@ function etagMatches(headerValue, etag) {
 function clampNumber(value, min, max) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function createHttpError(message, statusCode, code, details = undefined) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  if (details !== undefined) {
+    error.details = details;
+  }
+  return error;
 }
 
 function setCorsHeaders(res) {

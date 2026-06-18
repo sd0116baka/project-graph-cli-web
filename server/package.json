@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node src/server.js",
-    "start": "node src/server.js"
+    "dev": "pnpm -w nx run @graphif/project-graph-core:build && node src/server.js",
+    "start": "pnpm -w nx run @graphif/project-graph-core:build && node src/server.js",
+    "test": "pnpm -w nx run @graphif/project-graph-core:build && pnpm -w exec vitest run --config server/vitest.config.mjs"
   },
   "dependencies": {
     "@graphif/prg-codec": "workspace:*",
