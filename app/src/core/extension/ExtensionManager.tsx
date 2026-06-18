@@ -1,6 +1,7 @@
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { exists, mkdir, readDir } from "@tauri-apps/plugin-fs";
 import { URI } from "vscode-uri";
+import { isWeb } from "@/utils/platform";
 import { FileSystemProviderFile } from "../fileSystemProvider/FileSystemProviderFile";
 import { Settings } from "../service/Settings";
 import { Extension } from "./Extension";
@@ -11,10 +12,16 @@ export namespace ExtensionManager {
   const runtimes: Map<string, ExtensionRuntime> = new Map();
 
   export async function getExtensionsDir() {
+    if (isWeb) {
+      return "";
+    }
     console.log(await appDataDir());
     return await join(await appDataDir(), "extensions");
   }
   export async function getExtensions() {
+    if (isWeb) {
+      return [];
+    }
     const extensionsDir = await getExtensionsDir();
     if (!(await exists(extensionsDir))) {
       await mkdir(extensionsDir);
@@ -25,6 +32,9 @@ export namespace ExtensionManager {
   export async function getExtension(name: string) {
     if (extensions.has(name)) {
       return extensions.get(name)!;
+    }
+    if (isWeb) {
+      throw new Error("Web version does not support local extensions");
     }
     const extensionsDir = await getExtensionsDir();
     const extensionPath = await join(extensionsDir, name);

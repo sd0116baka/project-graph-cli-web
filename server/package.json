@@ -1,0 +1,13 @@
+{
+  "name": "@graphif/project-graph-web-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  }
+}

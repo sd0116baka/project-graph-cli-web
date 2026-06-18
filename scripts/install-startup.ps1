@@ -1,0 +1,40 @@
+param(
+  [int]$Port = 37820,
+  [string]$TaskName = "Project Graph Web"
+)
+
+$ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+$StartScript = Join-Path $ScriptDir "start-web.ps1"
+$LogDir = Join-Path $Root "server\data\logs"
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+
+$PowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$StartScript`" -SkipBuild -Port $Port"
+$Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Arguments -WorkingDirectory $Root
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$Principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+$Settings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -ExecutionTimeLimit (New-TimeSpan -Days 30) `
+  -MultipleInstances IgnoreNew
+
+Register-ScheduledTask `
+  -TaskName $TaskName `
+  -Action $Action `
+  -Trigger $Trigger `
+  -Principal $Principal `
+  -Settings $Settings `
+  -Description "Start Project Graph Web for the current user at logon." `
+  -Force | Out-Null
+
+Write-Host "Installed scheduled task: $TaskName"
+Write-Host "Trigger: current user logon"
+Write-Host "Port: $Port"
+Write-Host "Start script: $StartScript"
+
+$Task = Get-ScheduledTask -TaskName $TaskName
+$Task | Select-Object TaskName, State, TaskPath | Format-List

@@ -6,11 +6,12 @@
 interface ImportMetaEnv {
   LR_GITHUB_CLIENT_SECRET?: string;
   LR_API_BASE_URL?: string;
+  LR_PROJECT_GRAPH_SERVER_URL?: string;
   LR_FRAME?: string;
   LR_VITEST?: "true";
   LR_TURNSTILE_SITE_KEY?: string;
 }
 
 interface Window {
-  ipc_bridge: any
+  ipc_bridge: any;
 }

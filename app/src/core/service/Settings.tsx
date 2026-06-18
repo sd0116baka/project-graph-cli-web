@@ -1,5 +1,5 @@
 import { isMac } from "@/utils/platform";
-import { LazyStore } from "@tauri-apps/plugin-store";
+import { createStore } from "@/utils/store";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
@@ -505,10 +505,7 @@ export type Settings = z.infer<typeof settingsSchema>;
 
 const listeners: Partial<Record<string, ((value: any) => void)[]>> = {};
 
-const store = new LazyStore("settings.json");
-console.log("pre store.init");
-await store.init();
-console.log("post store.init");
+const store = await createStore("settings.json");
 
 // store加载完成后，推送所有listeners初始值
 // for (const key in listeners) {

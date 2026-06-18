@@ -2,11 +2,11 @@ import { AssetsRepository } from "@/core/service/AssetsRepository";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
 import { onNewDraft, onOpenFile } from "@/core/service/GlobalMenu";
 import { Tutorials } from "@/core/service/Tourials";
+import { getAppVersion } from "@/utils/otherApi";
 import RecentFilesWindow from "@/sub/RecentFilesWindow";
 import { cn } from "@/utils/cn";
 import { Path } from "@/utils/path";
-import { isMac } from "@/utils/platform";
-import { getVersion } from "@tauri-apps/api/app";
+import { isMac, isWeb } from "@/utils/platform";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
@@ -28,6 +28,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cpuInfo } from "tauri-plugin-system-info-api";
 import { URI } from "vscode-uri";
+import { ServerProjectBrowser } from "./server-project-browser";
 import SettingsWindow from "../sub/SettingsWindow";
 
 export default function WelcomePage() {
@@ -78,10 +79,10 @@ export default function WelcomePage() {
   useEffect(() => {
     refresh();
     (async () => {
-      setAppVersion(await getVersion());
+      setAppVersion(await getAppVersion());
       const dismissed = await Tutorials.isFinished("amdCpuWarning");
       setIsAmdWarningDismissed(dismissed);
-      if (!dismissed) {
+      if (!dismissed && !isWeb) {
         try {
           const cpu = await cpuInfo();
           const cpuBrand = cpu.cpus[0].brand;
@@ -164,57 +165,60 @@ export default function WelcomePage() {
         {/* 底部区域 */}
         <div className="flex sm:gap-16">
           <div className="flex flex-col sm:gap-8">
+            {isWeb && <ServerProjectBrowser />}
             {/* 常用操作 宫格区 */}
-            <div className="grid grid-cols-2 grid-rows-2 *:flex *:w-max *:cursor-pointer *:items-center *:gap-2 *:hover:opacity-75 *:active:scale-90 sm:gap-2 sm:gap-x-4">
-              <div
-                onClick={() => {
-                  if (isDownloadingGuideFile) {
-                    return;
-                  }
-                  setIsDownloadingGuideFile(true);
-                  toast.promise(
-                    async () => {
-                      const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-main-3.1.prg");
-                      const dir = await tempDir();
-                      const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
-                      await writeFile(path, u8a);
-                      await onOpenFile(URI.file(path), "功能说明书");
-                    },
-                    {
-                      loading: "正在下载功能说明书",
-                      error: async (err) => {
-                        console.error("下载功能说明书失败:", err);
-                        return (
-                          `下载功能说明书失败，可以尝试访问${AssetsRepository.getGuideFileUrl("tutorials/tutorial-main-3.1.prg")}，请确保您能访问github。` +
-                          err
-                        );
+            {!isWeb && (
+              <div className="grid grid-cols-2 grid-rows-2 *:flex *:w-max *:cursor-pointer *:items-center *:gap-2 *:hover:opacity-75 *:active:scale-90 sm:gap-2 sm:gap-x-4">
+                <div
+                  onClick={() => {
+                    if (isDownloadingGuideFile) {
+                      return;
+                    }
+                    setIsDownloadingGuideFile(true);
+                    toast.promise(
+                      async () => {
+                        const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-main-3.1.prg");
+                        const dir = await tempDir();
+                        const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
+                        await writeFile(path, u8a);
+                        await onOpenFile(URI.file(path), "功能说明书");
                       },
-                      finally: () => {
-                        setIsDownloadingGuideFile(false);
+                      {
+                        loading: "正在下载功能说明书",
+                        error: async (err) => {
+                          console.error("下载功能说明书失败:", err);
+                          return (
+                            `下载功能说明书失败，可以尝试访问${AssetsRepository.getGuideFileUrl("tutorials/tutorial-main-3.1.prg")}，请确保您能访问github。` +
+                            err
+                          );
+                        },
+                        finally: () => {
+                          setIsDownloadingGuideFile(false);
+                        },
                       },
-                    },
-                  );
-                }}
-              >
-                <MapIcon className={cn(isDownloadingGuideFile && "animate-spin")} />
-                <span className="hidden sm:inline">{t("newUserGuide")}</span>
+                    );
+                  }}
+                >
+                  <MapIcon className={cn(isDownloadingGuideFile && "animate-spin")} />
+                  <span className="hidden sm:inline">{t("newUserGuide")}</span>
+                </div>
+                <div onClick={onNewDraft}>
+                  <FilePlus />
+                  <span className="hidden sm:inline">{t("newDraft")}</span>
+                  <span className="hidden text-xs opacity-50 sm:inline">{isMac ? "⌘ + N" : "Ctrl + N"}</span>
+                </div>
+                <div onClick={() => RecentFilesWindow.open()}>
+                  <TableProperties />
+                  <span className="hidden sm:inline">{t("openRecentFiles")}</span>
+                  <span className="hidden text-xs opacity-50 sm:inline">Shift + #</span>
+                </div>
+                <div onClick={() => onOpenFile(undefined, "欢迎页面")}>
+                  <FolderOpen />
+                  <span className="hidden sm:inline">{t("openFile")}</span>
+                  <span className="hidden text-xs opacity-50 sm:inline">{isMac ? "⌘ + O" : "Ctrl + O"}</span>
+                </div>
               </div>
-              <div onClick={onNewDraft}>
-                <FilePlus />
-                <span className="hidden sm:inline">{t("newDraft")}</span>
-                <span className="hidden text-xs opacity-50 sm:inline">{isMac ? "⌘ + N" : "Ctrl + N"}</span>
-              </div>
-              <div onClick={() => RecentFilesWindow.open()}>
-                <TableProperties />
-                <span className="hidden sm:inline">{t("openRecentFiles")}</span>
-                <span className="hidden text-xs opacity-50 sm:inline">Shift + #</span>
-              </div>
-              <div onClick={() => onOpenFile(undefined, "欢迎页面")}>
-                <FolderOpen />
-                <span className="hidden sm:inline">{t("openFile")}</span>
-                <span className="hidden text-xs opacity-50 sm:inline">{isMac ? "⌘ + O" : "Ctrl + O"}</span>
-              </div>
-            </div>
+            )}
             <div className={cn("hidden flex-col gap-2 *:transition-opacity *:hover:opacity-75 sm:flex")}>
               {recentFiles.slice(0, 6).map((file, index) => (
                 <div
@@ -258,7 +262,11 @@ export default function WelcomePage() {
               <Info />
               <span className="hidden sm:inline">{t("about")}</span>
             </div>
-            <div onClick={() => shellOpen("https://project-graph.top")}>
+            <div
+              onClick={() =>
+                isWeb ? window.open("https://project-graph.top", "_blank") : shellOpen("https://project-graph.top")
+              }
+            >
               <Earth />
               <span className="hidden sm:inline">{t("website")}</span>
             </div>
