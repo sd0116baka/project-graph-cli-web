@@ -50,6 +50,7 @@ export function ServerProjectBrowser() {
   const [isStoppingBackend, setIsStoppingBackend] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const eventSubscriptionKey = `${activeBackendUrl}\n${!isWeb && useLanBackend ? `${backendAdminUser}\n${backendAdminPassword}` : "browser"}`;
 
   useEffect(() => {
     applyBackendAuth();
@@ -57,10 +58,19 @@ export function ServerProjectBrowser() {
 
   useEffect(() => {
     void refreshProjects();
+  }, []);
 
+  useEffect(() => {
     const onServerError = (event: Event) => {
       setLastFailure((event as CustomEvent<ServerProjectManager.ServerProjectErrorDetail>).detail);
     };
+    window.addEventListener(ServerProjectManager.errorEventName, onServerError);
+    return () => {
+      window.removeEventListener(ServerProjectManager.errorEventName, onServerError);
+    };
+  }, []);
+
+  useEffect(() => {
     let eventSubscription: (() => void) | undefined;
     let disposed = false;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -83,14 +93,12 @@ export function ServerProjectBrowser() {
       .catch((error) => {
         reportFailure(error, "订阅后端事件失败");
       });
-    window.addEventListener(ServerProjectManager.errorEventName, onServerError);
     return () => {
       disposed = true;
       eventSubscription?.();
       if (refreshTimer) globalThis.clearTimeout(refreshTimer);
-      window.removeEventListener(ServerProjectManager.errorEventName, onServerError);
     };
-  }, []);
+  }, [eventSubscriptionKey]);
 
   async function refreshProjects() {
     setIsRefreshing(true);
@@ -129,11 +137,7 @@ export function ServerProjectBrowser() {
   }
 
   async function connectBackend(url = backendUrlInput) {
-    const auth = applyBackendAuth();
-    if (useLanBackend && !auth) {
-      toast.error("请先设置 LAN 管理员账号和密码");
-      return;
-    }
+    applyBackendAuth();
     setIsConnecting(true);
     try {
       const next = await ServerProjectManager.connectServerBaseUrl(url);
@@ -346,7 +350,7 @@ export function ServerProjectBrowser() {
   }
 
   function applyBackendAuth(lanMode = useLanBackend): ServerProjectManager.BackendAuth | undefined {
-    const auth = lanMode ? backendAdminAuth() : undefined;
+    const auth = !isWeb && lanMode ? backendAdminAuth() : undefined;
     ServerProjectManager.setServerAuth(auth);
     return auth;
   }

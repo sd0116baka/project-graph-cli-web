@@ -310,26 +310,49 @@ export namespace ServerProjectManager {
   export async function subscribeBackendEvents(onEvent: (event: BackendEvent) => void): Promise<() => void> {
     await ensureBackendConnection();
     const controller = new AbortController();
-    const response = await fetch(apiUrl("/api/events"), {
-      headers: clientHeaders(),
-      signal: controller.signal,
-    });
-    if (!response.ok) await throwResponseError(response, "/api/events");
-    const reader = response.body?.getReader();
-    if (reader) {
-      void readBackendEventStream(reader, onEvent, controller.signal).catch((error) => {
-        if (controller.signal.aborted) return;
-        dispatchServerError({
-          status: 0,
-          code: "backend_events_failed",
-          message: "后端事件订阅中断",
-          recovery: "请确认 Web 后端仍在运行，然后刷新项目列表重试。",
-          path: "/api/events",
-          details: { error: error instanceof Error ? error.message : String(error) },
+    let reconnectTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let reportedFailure = false;
+
+    const scheduleReconnect = () => {
+      if (controller.signal.aborted) return;
+      if (reconnectTimer) globalThis.clearTimeout(reconnectTimer);
+      reconnectTimer = globalThis.setTimeout(() => void connect(), 1000);
+    };
+
+    const connect = async () => {
+      try {
+        const response = await fetch(apiUrl("/api/events"), {
+          headers: clientHeaders(),
+          signal: controller.signal,
         });
-      });
-    }
+        if (!response.ok) await throwResponseError(response, "/api/events");
+        reportedFailure = false;
+        const reader = response.body?.getReader();
+        if (reader) {
+          await readBackendEventStream(reader, onEvent, controller.signal);
+        }
+        scheduleReconnect();
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (!reportedFailure && !(error instanceof ServerProjectError)) {
+          reportedFailure = true;
+          dispatchServerError({
+            status: 0,
+            code: "backend_events_failed",
+            message: "后端事件订阅中断",
+            recovery: "请确认 Web 后端仍在运行，然后刷新项目列表重试。",
+            path: "/api/events",
+            details: { error: error instanceof Error ? error.message : String(error) },
+          });
+        }
+        reportedFailure = true;
+        scheduleReconnect();
+      }
+    };
+
+    void connect();
     return () => {
+      if (reconnectTimer) globalThis.clearTimeout(reconnectTimer);
       controller.abort();
     };
   }
@@ -548,7 +571,12 @@ export namespace ServerProjectManager {
   }
 
   function basicAuthHeader(auth: BackendAuth): string {
-    return `Basic ${window.btoa(`${auth.user}:${auth.password}`)}`;
+    const bytes = new TextEncoder().encode(`${auth.user}:${auth.password}`);
+    let value = "";
+    for (const byte of bytes) {
+      value += String.fromCharCode(byte);
+    }
+    return `Basic ${globalThis.btoa(value)}`;
   }
 
   async function readBackendEventStream(
