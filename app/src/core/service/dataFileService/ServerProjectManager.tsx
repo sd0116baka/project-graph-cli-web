@@ -308,33 +308,29 @@ export namespace ServerProjectManager {
   }
 
   export async function subscribeBackendEvents(onEvent: (event: BackendEvent) => void): Promise<() => void> {
-    if (typeof EventSource === "undefined") {
-      return () => undefined;
-    }
     await ensureBackendConnection();
-    const source = new EventSource(apiUrl("/api/events"), { withCredentials: true });
-    const eventNames = [
-      "server_connected",
-      "project_created",
-      "project_imported",
-      "project_renamed",
-      "project_deleted",
-      "project_updated",
-      "history_changed",
-      "lock_changed",
-    ];
-    const listeners = eventNames.map((eventName) => {
-      const listener = (event: MessageEvent<string>) => {
-        onEvent(JSON.parse(event.data) as BackendEvent);
-      };
-      source.addEventListener(eventName, listener);
-      return { eventName, listener };
+    const controller = new AbortController();
+    const response = await fetch(apiUrl("/api/events"), {
+      headers: clientHeaders(),
+      signal: controller.signal,
     });
+    if (!response.ok) await throwResponseError(response, "/api/events");
+    const reader = response.body?.getReader();
+    if (reader) {
+      void readBackendEventStream(reader, onEvent, controller.signal).catch((error) => {
+        if (controller.signal.aborted) return;
+        dispatchServerError({
+          status: 0,
+          code: "backend_events_failed",
+          message: "后端事件订阅中断",
+          recovery: "请确认 Web 后端仍在运行，然后刷新项目列表重试。",
+          path: "/api/events",
+          details: { error: error instanceof Error ? error.message : String(error) },
+        });
+      });
+    }
     return () => {
-      for (const { eventName, listener } of listeners) {
-        source.removeEventListener(eventName, listener);
-      }
-      source.close();
+      controller.abort();
     };
   }
 
@@ -553,6 +549,56 @@ export namespace ServerProjectManager {
 
   function basicAuthHeader(auth: BackendAuth): string {
     return `Basic ${window.btoa(`${auth.user}:${auth.password}`)}`;
+  }
+
+  async function readBackendEventStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    onEvent: (event: BackendEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        emitBackendEvent(buffer.slice(0, boundary), onEvent);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    const remaining = decoder.decode();
+    if (remaining) {
+      buffer += remaining;
+      emitBackendEvent(buffer, onEvent);
+    }
+  }
+
+  function emitBackendEvent(rawEvent: string, onEvent: (event: BackendEvent) => void): void {
+    const lines = rawEvent.split("\n");
+    const data: string[] = [];
+    let eventName = "";
+    for (const line of lines) {
+      if (!line || line.startsWith(":")) continue;
+      const separatorIndex = line.indexOf(":");
+      const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
+      let value = separatorIndex === -1 ? "" : line.slice(separatorIndex + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+      if (field === "event") {
+        eventName = value;
+      } else if (field === "data") {
+        data.push(value);
+      }
+    }
+    if (data.length === 0) return;
+    const event = JSON.parse(data.join("\n")) as BackendEvent;
+    if (!event.type && eventName) {
+      event.type = eventName;
+    }
+    onEvent(event);
   }
 
   async function throwResponseError(response: Response, path: string): Promise<never> {

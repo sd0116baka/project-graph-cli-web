@@ -10,7 +10,9 @@ The Desktop server-project browser defaults to LAN mode when launching a backend
 
 ## Credentials
 
-`start-web.ps1` generates a random password when auth is enabled and no password exists. Credentials are stored in:
+Desktop LAN startup uses an administrator user and password configured in the server-project browser. The first LAN startup requires the password; later launches reuse the same stored credentials.
+
+`start-web.ps1` persists explicit credentials passed by Desktop or CLI. If auth is enabled from the script without a password and no previous credential file exists, it still generates a random password for script-only use. Credentials are stored in:
 
 ```text
 <DataDir>\auth.json

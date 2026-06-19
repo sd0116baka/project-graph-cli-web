@@ -35,6 +35,8 @@ export function ServerProjectBrowser() {
   const [activeBackendUrl, setActiveBackendUrl] = useState(ServerProjectManager.getServerBaseUrl());
   const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
   const [useLanBackend, setUseLanBackend] = useState(true);
+  const [backendAdminUser, setBackendAdminUser] = useState(readBackendAdminUser);
+  const [backendAdminPassword, setBackendAdminPassword] = useState(readBackendAdminPassword);
   const [startedBackendPort, setStartedBackendPort] = useState<number | undefined>();
   const [startedBackendAuth, setStartedBackendAuth] = useState<ServerProjectManager.BackendAuth | undefined>();
   const [lastFailure, setLastFailure] = useState<ServerProjectManager.ServerProjectErrorDetail | undefined>();
@@ -48,6 +50,10 @@ export function ServerProjectBrowser() {
   const [isStoppingBackend, setIsStoppingBackend] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    applyBackendAuth();
+  }, [useLanBackend, backendAdminUser, backendAdminPassword]);
 
   useEffect(() => {
     void refreshProjects();
@@ -118,11 +124,16 @@ export function ServerProjectBrowser() {
     if (startedBackendPort !== undefined && !targets.some((target) => target.port === startedBackendPort)) {
       setStartedBackendPort(undefined);
       setStartedBackendAuth(undefined);
-      ServerProjectManager.setServerAuth(undefined);
+      applyBackendAuth();
     }
   }
 
   async function connectBackend(url = backendUrlInput) {
+    const auth = applyBackendAuth();
+    if (useLanBackend && !auth) {
+      toast.error("请先设置 LAN 管理员账号和密码");
+      return;
+    }
     setIsConnecting(true);
     try {
       const next = await ServerProjectManager.connectServerBaseUrl(url);
@@ -145,9 +156,18 @@ export function ServerProjectBrowser() {
 
   async function startBackend() {
     const lanMode = useLanBackend;
-    const auth = lanMode ? createBackendAuth() : undefined;
+    const auth = lanMode ? backendAdminAuth() : undefined;
+    if (lanMode && !auth) {
+      toast.error("请先设置 LAN 管理员账号和密码");
+      return;
+    }
     setIsStartingBackend(true);
     try {
+      if (auth) {
+        persistBackendAdminAuth(auth);
+        setBackendAdminUser(auth.user);
+        setBackendAdminPassword(auth.password);
+      }
       ServerProjectManager.clearServerBaseUrl();
       ServerProjectManager.setServerAuth(auth);
       const started = await ServerProjectManager.startBackendDaemon({
@@ -172,7 +192,7 @@ export function ServerProjectBrowser() {
     } catch (error) {
       setStartedBackendPort(undefined);
       setStartedBackendAuth(undefined);
-      ServerProjectManager.setServerAuth(undefined);
+      applyBackendAuth();
       reportFailure(error, "启动后端失败");
     } finally {
       setIsStartingBackend(false);
@@ -193,6 +213,7 @@ export function ServerProjectBrowser() {
       setHistoryProjectId("");
       setStartedBackendPort(undefined);
       setStartedBackendAuth(undefined);
+      applyBackendAuth();
       await refreshBackendTargets();
       toast.success("后端已关闭");
     } catch (error) {
@@ -320,10 +341,31 @@ export function ServerProjectBrowser() {
     toast.error(`${title}：${message}`);
   }
 
+  function backendAdminAuth(): ServerProjectManager.BackendAuth | undefined {
+    return createBackendAdminAuth(backendAdminUser, backendAdminPassword);
+  }
+
+  function applyBackendAuth(lanMode = useLanBackend): ServerProjectManager.BackendAuth | undefined {
+    const auth = lanMode ? backendAdminAuth() : undefined;
+    ServerProjectManager.setServerAuth(auth);
+    return auth;
+  }
+
+  function updateBackendAdminUser(value: string) {
+    setBackendAdminUser(value);
+    writeLocalStorage(backendAdminUserStorageKey, value.trim() || defaultBackendAdminUser);
+  }
+
+  function updateBackendAdminPassword(value: string) {
+    setBackendAdminPassword(value);
+    writeLocalStorage(backendAdminPasswordStorageKey, value);
+  }
+
   const historyProject = projects.find((project) => project.id === historyProjectId);
   const historyLockedByOther = historyProject ? ServerProjectManager.isLockedByOther(historyProject) : false;
   const lockedProjectCount = projects.filter((project) => project.lock).length;
   const backendModeLocked = startedBackendPort !== undefined || isStartingBackend || isStoppingBackend;
+  const configuredBackendAuth = backendAdminAuth();
 
   return (
     <div className="flex min-w-80 flex-col gap-3 sm:min-w-96">
@@ -360,7 +402,7 @@ export function ServerProjectBrowser() {
             <div className="flex min-w-0 items-center gap-2">
               <Lock />
               <span className="truncate">
-                LAN 认证 {startedBackendAuth.user} / {startedBackendAuth.password}
+                LAN 管理员 {startedBackendAuth.user} / {startedBackendAuth.password}
               </span>
             </div>
           )}
@@ -419,6 +461,24 @@ export function ServerProjectBrowser() {
             </Button>
           )}
         </div>
+        {!isWeb && useLanBackend && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <Input
+              value={backendAdminUser}
+              placeholder="管理员账号"
+              disabled={backendModeLocked}
+              autoComplete="username"
+              onChange={(event) => updateBackendAdminUser(event.target.value)}
+            />
+            <Input
+              value={backendAdminPassword}
+              placeholder={configuredBackendAuth ? "管理员密码" : "首次设置管理员密码"}
+              disabled={backendModeLocked}
+              autoComplete="new-password"
+              onChange={(event) => updateBackendAdminPassword(event.target.value)}
+            />
+          </div>
+        )}
         {backendTargets.length > 0 && (
           <div className="flex max-h-20 flex-col gap-1 overflow-auto">
             {backendTargets.map((target, index) => {
@@ -574,14 +634,42 @@ export function ServerProjectBrowser() {
   );
 }
 
-function createBackendAuth(): ServerProjectManager.BackendAuth {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return {
-    user: "pg",
-    password: Array.from(bytes, (byte) => chars[byte % chars.length]).join(""),
-  };
+const defaultBackendAdminUser = "pg";
+const backendAdminUserStorageKey = "project-graph-lan-backend-admin-user";
+const backendAdminPasswordStorageKey = "project-graph-lan-backend-admin-password";
+
+function readBackendAdminUser(): string {
+  return readLocalStorage(backendAdminUserStorageKey) || defaultBackendAdminUser;
+}
+
+function readBackendAdminPassword(): string {
+  return readLocalStorage(backendAdminPasswordStorageKey);
+}
+
+function createBackendAdminAuth(user: string, password: string): ServerProjectManager.BackendAuth | undefined {
+  const normalizedUser = user.trim() || defaultBackendAdminUser;
+  const normalizedPassword = password.trim();
+  if (!normalizedPassword) return undefined;
+  return { user: normalizedUser, password: normalizedPassword };
+}
+
+function persistBackendAdminAuth(auth: ServerProjectManager.BackendAuth) {
+  writeLocalStorage(backendAdminUserStorageKey, auth.user);
+  writeLocalStorage(backendAdminPasswordStorageKey, auth.password);
+}
+
+function readLocalStorage(key: string): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(key) ?? "";
+}
+
+function writeLocalStorage(key: string, value: string) {
+  if (typeof localStorage === "undefined") return;
+  if (value) {
+    localStorage.setItem(key, value);
+  } else {
+    localStorage.removeItem(key);
+  }
 }
 
 function projectLine(

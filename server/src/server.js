@@ -46,7 +46,7 @@ const server = http.createServer(async (req, res) => {
 
     const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (authPassword && requestUrl.pathname !== "/api/health" && !isAuthorized(req)) {
-      sendUnauthorized(res);
+      sendUnauthorized(req, res);
       return;
     }
 
@@ -994,8 +994,10 @@ function safeEquals(actual, expected) {
   return timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-function sendUnauthorized(res) {
-  res.setHeader("WWW-Authenticate", 'Basic realm="Project Graph Web", charset="UTF-8"');
+function sendUnauthorized(req, res) {
+  if (!req.headers["x-project-graph-client"]) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="Project Graph Web", charset="UTF-8"');
+  }
   sendError(res, 401, "authentication_required", "Authentication required");
 }
 

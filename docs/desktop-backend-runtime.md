@@ -51,8 +51,10 @@ Desktop backend startup searches in this order:
 
 The Desktop server-project browser can launch either backend mode:
 
-- LAN mode is the default. Desktop starts `start-web.ps1` without `-LocalOnly`, keeps Basic auth enabled, and passes generated credentials for its own API calls. The LAN URL and credentials are shown in the backend panel so another device can connect.
+- LAN mode is the default. On first LAN startup, Desktop requires an administrator user and password. It passes those credentials to `start-web.ps1`, uses them for its own API calls, and shows them in the backend panel so another device can connect.
 - Local-only mode is selected by clearing the LAN checkbox before startup. Desktop passes `-LocalOnly -NoAuth`, binds `127.0.0.1`, and does not expose the helper backend to the LAN.
+
+The administrator credentials are reused on later Desktop launches. The startup script writes the same credentials to the backend data directory's `auth.json`, so the LAN browser login, CLI automation, and Desktop API calls authenticate against one backend credential source.
 
 When the script is found under `backend-runtime`, Desktop startup also:
 
@@ -87,6 +89,7 @@ pnpm run package:desktop-preview
 Then install the Desktop package on a clean Windows machine and verify:
 
 - the server-project browser defaults to a LAN backend with Basic auth,
+- first LAN startup requires administrator credentials and later startups reuse them,
 - clearing the LAN checkbox starts a local-only backend,
 - the backend registry contains the selected `lanMode`,
 - local backend startup does not print a password,

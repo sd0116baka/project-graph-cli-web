@@ -263,12 +263,19 @@ describe("@graphif/project-graph-web-server", () => {
     const server = await startServer({ authPassword: "secret" });
 
     const unauthenticated = await requestJson(server, "/api/server-info");
+    const desktopClient = await requestJson(server, "/api/server-info", {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
     const authenticated = await requestJson(server, "/api/server-info", {
       headers: { Authorization: "Basic cGc6c2VjcmV0" },
     });
 
     expect(unauthenticated.response.status).toBe(401);
+    expect(unauthenticated.response.headers.get("www-authenticate")).toContain("Basic");
     expect(unauthenticated.body).toMatchObject({ ok: false, code: "authentication_required" });
+    expect(desktopClient.response.status).toBe(401);
+    expect(desktopClient.response.headers.get("www-authenticate")).toBeNull();
+    expect(desktopClient.body).toMatchObject({ ok: false, code: "authentication_required" });
     expect(authenticated.response.status).toBe(200);
     expect(authenticated.body).toMatchObject({ ok: true, authEnabled: true });
   });
