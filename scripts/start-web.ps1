@@ -132,6 +132,7 @@ New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 $AuthPath = Join-Path $DataDir "auth.json"
 
 if (-not $NoAuth) {
+  $ShouldWriteAuthConfig = $false
   if (-not $AuthPassword -and (Test-Path $AuthPath)) {
     $AuthConfig = Get-Content -Raw $AuthPath | ConvertFrom-Json
     $AuthUser = if ($AuthConfig.user) { [string]$AuthConfig.user } else { $AuthUser }
@@ -140,6 +141,12 @@ if (-not $NoAuth) {
 
   if (-not $AuthPassword) {
     $AuthPassword = New-RandomPassword
+    $ShouldWriteAuthConfig = $true
+  } elseif ($PSBoundParameters.ContainsKey("AuthPassword")) {
+    $ShouldWriteAuthConfig = $true
+  }
+
+  if ($ShouldWriteAuthConfig) {
     @{
       user = $AuthUser
       password = $AuthPassword

@@ -9,6 +9,8 @@ use tauri::Manager;
 pub struct BackendStartOptions {
     port: Option<u16>,
     data_dir: Option<String>,
+    auth_user: Option<String>,
+    auth_password: Option<String>,
     no_auth: Option<bool>,
     skip_build: Option<bool>,
     local_only: Option<bool>,
@@ -22,6 +24,23 @@ pub struct BackendStartResult {
     pid: u32,
     script: String,
     log_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendStopOptions {
+    port: Option<u16>,
+    port_start: Option<u16>,
+    port_end: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendStopResult {
+    ok: bool,
+    script: String,
+    port_start: u16,
+    port_end: u16,
 }
 
 #[tauri::command]
@@ -56,6 +75,8 @@ pub fn project_graph_backend_start(
     let options = options.unwrap_or(BackendStartOptions {
         port: None,
         data_dir: None,
+        auth_user: None,
+        auth_password: None,
         no_auth: Some(false),
         skip_build: None,
         local_only: Some(false),
@@ -95,6 +116,16 @@ pub fn project_graph_backend_start(
     if let Some(data_dir) = data_dir.as_deref() {
         command.arg("-DataDir").arg(data_dir);
     }
+    if let Some(auth_user) = options.auth_user.as_deref() {
+        if !auth_user.trim().is_empty() {
+            command.arg("-AuthUser").arg(auth_user);
+        }
+    }
+    if let Some(auth_password) = options.auth_password.as_deref() {
+        if !auth_password.is_empty() {
+            command.arg("-AuthPassword").arg(auth_password);
+        }
+    }
     if options.no_auth.unwrap_or(false) {
         command.arg("-NoAuth");
     }
@@ -119,6 +150,48 @@ pub fn project_graph_backend_start(
     })
 }
 
+#[tauri::command]
+pub fn project_graph_backend_stop(
+    app: tauri::AppHandle,
+    options: Option<BackendStopOptions>,
+) -> Result<BackendStopResult, String> {
+    let options = options.unwrap_or(BackendStopOptions {
+        port: None,
+        port_start: None,
+        port_end: None,
+    });
+    let script = backend_script(&app, "stop-web.ps1")?;
+    let port_start = options.port.or(options.port_start).unwrap_or(37820);
+    let port_end = options.port.or(options.port_end).unwrap_or(37920);
+    let output = Command::new(powershell_executable())
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&script)
+        .arg("-PortStart")
+        .arg(port_start.to_string())
+        .arg("-PortEnd")
+        .arg(port_end.to_string())
+        .output()
+        .map_err(|error| format!("Failed to stop Project Graph backend: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "Failed to stop Project Graph backend: {}{}",
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
+    Ok(BackendStopResult {
+        ok: true,
+        script: script.to_string_lossy().to_string(),
+        port_start,
+        port_end,
+    })
+}
+
 fn backend_registry_path() -> std::path::PathBuf {
     if let Ok(path) = std::env::var("PROJECT_GRAPH_BACKEND_REGISTRY") {
         if !path.trim().is_empty() {
@@ -129,10 +202,20 @@ fn backend_registry_path() -> std::path::PathBuf {
 }
 
 fn backend_start_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    backend_script(app, "start-web.ps1")
+}
+
+fn backend_script(app: &tauri::AppHandle, script_name: &str) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("PROJECT_GRAPH_BACKEND_START_SCRIPT") {
         let candidate = PathBuf::from(path);
-        if candidate.is_file() {
+        if script_name == "start-web.ps1" && candidate.is_file() {
             return Ok(candidate);
+        }
+        if let Some(parent) = candidate.parent() {
+            let sibling = parent.join(script_name);
+            if sibling.is_file() {
+                return Ok(sibling);
+            }
         }
     }
     let mut roots = Vec::new();
@@ -148,23 +231,25 @@ fn backend_start_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         roots.push(resource_dir);
     }
     for root in roots {
-        if let Some(script) = find_start_script_from(&root) {
+        if let Some(script) = find_script_from(&root, script_name) {
             return Ok(script);
         }
     }
-    Err("Project Graph backend startup script was not found. Set PROJECT_GRAPH_BACKEND_START_SCRIPT or run scripts/start-web.ps1 manually.".to_string())
+    Err(format!(
+        "Project Graph backend script {script_name} was not found. Set PROJECT_GRAPH_BACKEND_START_SCRIPT or run scripts/start-web.ps1 manually."
+    ))
 }
 
-fn find_start_script_from(root: &Path) -> Option<PathBuf> {
+fn find_script_from(root: &Path, script_name: &str) -> Option<PathBuf> {
     for ancestor in root.ancestors() {
         let resource_candidate = ancestor
             .join("backend-runtime")
             .join("scripts")
-            .join("start-web.ps1");
+            .join(script_name);
         if resource_candidate.is_file() {
             return Some(resource_candidate);
         }
-        let candidate = ancestor.join("scripts").join("start-web.ps1");
+        let candidate = ancestor.join("scripts").join(script_name);
         if candidate.is_file() {
             return Some(candidate);
         }

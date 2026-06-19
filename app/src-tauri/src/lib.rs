@@ -133,6 +133,7 @@ pub fn run() {
             cmd::backend::project_graph_backend_registry_path,
             cmd::backend::project_graph_backend_targets,
             cmd::backend::project_graph_backend_start,
+            cmd::backend::project_graph_backend_stop,
             cmd::live::project_graph_live_start,
             cmd::live::project_graph_live_response,
             #[cfg(feature = "paddle-ocr")]

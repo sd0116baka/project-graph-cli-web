@@ -76,6 +76,8 @@ export namespace ServerProjectManager {
   export type BackendStartOptions = {
     port?: number;
     dataDir?: string;
+    authUser?: string;
+    authPassword?: string;
     noAuth?: boolean;
     skipBuild?: boolean;
     localOnly?: boolean;
@@ -87,6 +89,29 @@ export namespace ServerProjectManager {
     pid: number;
     script: string;
     logPath: string;
+  };
+
+  export type BackendStopOptions = {
+    port?: number;
+    portStart?: number;
+    portEnd?: number;
+  };
+
+  export type BackendStopResult = {
+    ok: true;
+    script: string;
+    portStart: number;
+    portEnd: number;
+  };
+
+  export type BackendAuth = {
+    user: string;
+    password: string;
+  };
+
+  export type BackendConnectionOptions = {
+    preferLan?: boolean;
+    lanMode?: boolean;
   };
 
   export type ServerProjectErrorDetail = {
@@ -122,6 +147,7 @@ export namespace ServerProjectManager {
   const backendUrlStorageKey = "project-graph-backend-url";
   const projectEtags = new Map<string, string>();
   let activeServerBaseUrl: string | undefined;
+  let activeBackendAuth: BackendAuth | undefined;
   let backendConnectionPromise: Promise<string> | undefined;
 
   export function projectUri(id: string): URI {
@@ -175,6 +201,20 @@ export namespace ServerProjectManager {
     return invoke<BackendStartResult>("project_graph_backend_start", { options });
   }
 
+  export async function stopBackendDaemon(options: BackendStopOptions = {}): Promise<BackendStopResult> {
+    if (!isTauriRuntime()) {
+      throwProjectError({
+        status: 0,
+        code: "backend_stop_unavailable",
+        message: "当前环境不能关闭本机后端",
+        recovery: "请在桌面版中关闭本机后端，或手动运行 scripts/stop-web.ps1。",
+        path: "",
+      });
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<BackendStopResult>("project_graph_backend_stop", { options });
+  }
+
   export async function ensureBackendConnection(): Promise<string> {
     const configured = serverBaseUrl();
     if (configured) return configured;
@@ -202,6 +242,10 @@ export namespace ServerProjectManager {
     return next;
   }
 
+  export function setServerAuth(auth: BackendAuth | undefined): void {
+    activeBackendAuth = auth;
+  }
+
   export async function connectServerBaseUrl(url: string): Promise<string> {
     const next = normalizeBackendUrl(url);
     const health = await probeBackend(next);
@@ -218,13 +262,17 @@ export namespace ServerProjectManager {
     return setServerBaseUrl(next);
   }
 
-  export async function waitForBackendConnection(timeoutMs = 60000): Promise<string> {
+  export async function waitForBackendConnection(
+    timeoutMs = 60000,
+    options: BackendConnectionOptions = {},
+  ): Promise<string> {
     const deadline = Date.now() + timeoutMs;
     let lastError = "";
     while (Date.now() < deadline) {
       const targets = await discoverBackendTargets();
       for (const target of targets) {
-        const url = backendTargetUrl(target);
+        if (options.lanMode !== undefined && target.lanMode !== options.lanMode) continue;
+        const url = backendTargetUrl(target, options);
         if (!url) continue;
         const health = await probeBackend(url);
         if (health.ok) {
@@ -246,12 +294,16 @@ export namespace ServerProjectManager {
 
   export function clearServerBaseUrl(): void {
     activeServerBaseUrl = undefined;
+    activeBackendAuth = undefined;
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(backendUrlStorageKey);
     }
   }
 
-  export function backendTargetUrl(target: BackendTarget): string {
+  export function backendTargetUrl(target: BackendTarget, options: BackendConnectionOptions = {}): string {
+    if (options.preferLan) {
+      return target.lanUrl || target.localUrl || target.url || "";
+    }
     return target.localUrl || target.url || target.lanUrl || "";
   }
 
@@ -490,9 +542,17 @@ export namespace ServerProjectManager {
   }
 
   function clientHeaders(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       "X-Project-Graph-Client": getClientId(),
     };
+    if (activeBackendAuth) {
+      headers.Authorization = basicAuthHeader(activeBackendAuth);
+    }
+    return headers;
+  }
+
+  function basicAuthHeader(auth: BackendAuth): string {
+    return `Basic ${window.btoa(`${auth.user}:${auth.password}`)}`;
   }
 
   async function throwResponseError(response: Response, path: string): Promise<never> {

@@ -1,6 +1,7 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
@@ -17,6 +18,7 @@ import {
   Pencil,
   Plus,
   Power,
+  PowerOff,
   RefreshCw,
   RotateCcw,
   Server,
@@ -32,6 +34,9 @@ export function ServerProjectBrowser() {
   const [backendTargets, setBackendTargets] = useState<ServerProjectManager.BackendTarget[]>([]);
   const [activeBackendUrl, setActiveBackendUrl] = useState(ServerProjectManager.getServerBaseUrl());
   const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
+  const [useLanBackend, setUseLanBackend] = useState(true);
+  const [startedBackendPort, setStartedBackendPort] = useState<number | undefined>();
+  const [startedBackendAuth, setStartedBackendAuth] = useState<ServerProjectManager.BackendAuth | undefined>();
   const [lastFailure, setLastFailure] = useState<ServerProjectManager.ServerProjectErrorDetail | undefined>();
   const [projectName, setProjectName] = useState("");
   const [historyProjectId, setHistoryProjectId] = useState("");
@@ -40,6 +45,7 @@ export function ServerProjectBrowser() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isStartingBackend, setIsStartingBackend] = useState(false);
+  const [isStoppingBackend, setIsStoppingBackend] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
@@ -109,6 +115,11 @@ export function ServerProjectBrowser() {
   async function refreshBackendTargets() {
     const targets = await ServerProjectManager.discoverBackendTargets();
     setBackendTargets(targets);
+    if (startedBackendPort !== undefined && !targets.some((target) => target.port === startedBackendPort)) {
+      setStartedBackendPort(undefined);
+      setStartedBackendAuth(undefined);
+      ServerProjectManager.setServerAuth(undefined);
+    }
   }
 
   async function connectBackend(url = backendUrlInput) {
@@ -132,21 +143,62 @@ export function ServerProjectBrowser() {
     await connectBackend(url);
   }
 
-  async function startLocalBackend() {
+  async function startBackend() {
+    const lanMode = useLanBackend;
+    const auth = lanMode ? createBackendAuth() : undefined;
     setIsStartingBackend(true);
     try {
       ServerProjectManager.clearServerBaseUrl();
-      const started = await ServerProjectManager.startBackendDaemon({ noAuth: true, localOnly: true });
-      toast.info("本机后端正在启动");
-      const backendUrl = await ServerProjectManager.waitForBackendConnection();
+      ServerProjectManager.setServerAuth(auth);
+      const started = await ServerProjectManager.startBackendDaemon({
+        authUser: auth?.user,
+        authPassword: auth?.password,
+        noAuth: !lanMode,
+        localOnly: !lanMode,
+      });
+      toast.info(lanMode ? "LAN 后端正在启动" : "本机后端正在启动");
+      const backendUrl = await ServerProjectManager.waitForBackendConnection(60000, {
+        lanMode,
+        preferLan: lanMode,
+      });
       setActiveBackendUrl(backendUrl);
       setBackendUrlInput(backendUrl);
+      const info = await ServerProjectManager.getServerInfo();
+      setServerInfo(info);
+      setStartedBackendPort(info.port);
+      setStartedBackendAuth(auth);
       await refreshProjects();
-      toast.success(`本机后端已启动，日志：${started.logPath}`);
+      toast.success(`${lanMode ? "LAN" : "本机"}后端已启动，日志：${started.logPath}`);
     } catch (error) {
-      reportFailure(error, "启动本机后端失败");
+      setStartedBackendPort(undefined);
+      setStartedBackendAuth(undefined);
+      ServerProjectManager.setServerAuth(undefined);
+      reportFailure(error, "启动后端失败");
     } finally {
       setIsStartingBackend(false);
+    }
+  }
+
+  async function stopStartedBackend() {
+    if (startedBackendPort === undefined) return;
+    setIsStoppingBackend(true);
+    try {
+      await ServerProjectManager.stopBackendDaemon({ port: startedBackendPort });
+      ServerProjectManager.clearServerBaseUrl();
+      setActiveBackendUrl("");
+      setBackendUrlInput("");
+      setServerInfo(undefined);
+      setProjects([]);
+      setHistory([]);
+      setHistoryProjectId("");
+      setStartedBackendPort(undefined);
+      setStartedBackendAuth(undefined);
+      await refreshBackendTargets();
+      toast.success("后端已关闭");
+    } catch (error) {
+      reportFailure(error, "关闭后端失败");
+    } finally {
+      setIsStoppingBackend(false);
     }
   }
 
@@ -271,6 +323,7 @@ export function ServerProjectBrowser() {
   const historyProject = projects.find((project) => project.id === historyProjectId);
   const historyLockedByOther = historyProject ? ServerProjectManager.isLockedByOther(historyProject) : false;
   const lockedProjectCount = projects.filter((project) => project.lock).length;
+  const backendModeLocked = startedBackendPort !== undefined || isStartingBackend || isStoppingBackend;
 
   return (
     <div className="flex min-w-80 flex-col gap-3 sm:min-w-96">
@@ -303,9 +356,18 @@ export function ServerProjectBrowser() {
               {projects.length} 个项目，{lockedProjectCount} 个有活动锁，本机标识 {serverInfo?.clientName ?? "Web"}
             </span>
           </div>
+          {startedBackendAuth && serverInfo?.lanMode && (
+            <div className="flex min-w-0 items-center gap-2">
+              <Lock />
+              <span className="truncate">
+                LAN 认证 {startedBackendAuth.user} / {startedBackendAuth.password}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Input
+            className="min-w-0 flex-1"
             value={backendUrlInput}
             placeholder="http://127.0.0.1:37820"
             onChange={(event) => setBackendUrlInput(event.target.value)}
@@ -315,6 +377,21 @@ export function ServerProjectBrowser() {
               }
             }}
           />
+          {!isWeb && (
+            <label
+              className={`border-input flex h-9 shrink-0 items-center gap-2 rounded-md border px-2 text-xs ${
+                backendModeLocked ? "opacity-50" : ""
+              }`}
+              title="启动为 LAN 共享后端"
+            >
+              <Checkbox
+                checked={useLanBackend}
+                disabled={backendModeLocked}
+                onCheckedChange={(checked) => setUseLanBackend(checked === true)}
+              />
+              <span>LAN</span>
+            </label>
+          )}
           <Button
             size="icon"
             variant="outline"
@@ -328,11 +405,17 @@ export function ServerProjectBrowser() {
             <Button
               size="icon"
               variant="outline"
-              title="启动本机后端"
-              disabled={isStartingBackend}
-              onClick={() => void startLocalBackend()}
+              title={startedBackendPort === undefined ? "启动后端" : "关闭后端"}
+              disabled={isStartingBackend || isStoppingBackend}
+              onClick={() => void (startedBackendPort === undefined ? startBackend() : stopStartedBackend())}
             >
-              {isStartingBackend ? <LoaderCircle className="animate-spin" /> : <Power />}
+              {isStartingBackend || isStoppingBackend ? (
+                <LoaderCircle className="animate-spin" />
+              ) : startedBackendPort === undefined ? (
+                <Power />
+              ) : (
+                <PowerOff />
+              )}
             </Button>
           )}
         </div>
@@ -489,6 +572,16 @@ export function ServerProjectBrowser() {
       )}
     </div>
   );
+}
+
+function createBackendAuth(): ServerProjectManager.BackendAuth {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return {
+    user: "pg",
+    password: Array.from(bytes, (byte) => chars[byte % chars.length]).join(""),
+  };
 }
 
 function projectLine(

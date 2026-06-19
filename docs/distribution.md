@@ -32,7 +32,7 @@ After extracting:
 
 ## Desktop Sidecar Decision
 
-The current Desktop can discover and launch a local backend through `scripts/start-web.ps1`.
+The current Desktop can discover and launch a backend through `scripts/start-web.ps1`. Its server-project browser defaults to a LAN-mode authenticated backend for sharing, and can be switched to local-only mode before startup.
 
 The installer direction is to bundle the portable backend runtime as a Tauri resource under `backend-runtime\`. Desktop startup now searches this installed resource layout in addition to source and portable checkout layouts. The detailed installer contract is documented in [desktop-backend-runtime.md](desktop-backend-runtime.md).
 

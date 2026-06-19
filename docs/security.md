@@ -6,6 +6,8 @@ Local-only mode is for Desktop-launched helper backends. It binds `127.0.0.1`, w
 
 LAN mode is for shared browser, CLI, and Desktop access. It binds `0.0.0.0`, writes a LAN URL to the backend registry, and keeps Basic auth enabled by default.
 
+The Desktop server-project browser defaults to LAN mode when launching a backend. Clearing the LAN checkbox before startup switches it to local-only mode; once Desktop starts a backend, the checkbox is locked until that backend is stopped.
+
 ## Credentials
 
 `start-web.ps1` generates a random password when auth is enabled and no password exists. Credentials are stored in:

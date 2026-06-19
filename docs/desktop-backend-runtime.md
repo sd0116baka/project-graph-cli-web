@@ -49,7 +49,10 @@ Desktop backend startup searches in this order:
 2. `scripts/start-web.ps1` in the current checkout or portable runtime ancestors,
 3. `backend-runtime/scripts/start-web.ps1` under the installed Tauri resource directory.
 
-Desktop launches this script with `-LocalOnly` for its helper backend. Shared LAN backends should still be started explicitly with `start-web.cmd`, which keeps auth enabled by default.
+The Desktop server-project browser can launch either backend mode:
+
+- LAN mode is the default. Desktop starts `start-web.ps1` without `-LocalOnly`, keeps Basic auth enabled, and passes generated credentials for its own API calls. The LAN URL and credentials are shown in the backend panel so another device can connect.
+- Local-only mode is selected by clearing the LAN checkbox before startup. Desktop passes `-LocalOnly -NoAuth`, binds `127.0.0.1`, and does not expose the helper backend to the LAN.
 
 When the script is found under `backend-runtime`, Desktop startup also:
 
@@ -83,8 +86,9 @@ pnpm run package:desktop-preview
 
 Then install the Desktop package on a clean Windows machine and verify:
 
-- the welcome page can start a local-only backend,
-- the backend registry contains `lanMode: false`,
+- the server-project browser defaults to a LAN backend with Basic auth,
+- clearing the LAN checkbox starts a local-only backend,
+- the backend registry contains the selected `lanMode`,
 - local backend startup does not print a password,
 - opening, saving, locking, history, and restore work for `server:` projects,
 - uninstalling Desktop does not delete the configured backend data directory.
