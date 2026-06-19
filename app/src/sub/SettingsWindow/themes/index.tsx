@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -111,7 +112,7 @@ export default function ThemesTab() {
             variant="outline"
             onClick={() => {
               if (!selectedTheme) return;
-              Themes.writeCustomTheme(_.set(_.cloneDeep(selectedTheme), "metadata.id", crypto.randomUUID())).then(
+              Themes.writeCustomTheme(_.set(_.cloneDeep(selectedTheme), "metadata.id", randomUUID())).then(
                 updateThemeIds,
               );
             }}

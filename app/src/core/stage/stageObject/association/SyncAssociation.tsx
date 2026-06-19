@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { Association } from "@/core/stage/stageObject/abstract/Association";
 import { StageObject } from "@/core/stage/stageObject/abstract/StageObject";
@@ -74,7 +75,7 @@ export class SyncAssociation extends Association {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       keys = ["text", "color", "details"] as SyncableKey[],
       associationList = [] as StageObject[],
       color = Color.Transparent,

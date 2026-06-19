@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { store } from "@/state";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
@@ -44,7 +45,7 @@ export namespace SubWindow {
   }
   export function create(options: Partial<Window>): Window {
     const win: Window = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       title: "",
       children: <></>,
       rect: new Rectangle(Vector.getZero(), Vector.same(100)),

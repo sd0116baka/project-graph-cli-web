@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { ConvexHull } from "@/core/algorithm/geometry/convexHull";
 import { Renderer } from "@/core/render/canvas2d/renderer";
@@ -151,7 +152,7 @@ export class MultiTargetUndirectedEdge extends ConnectableAssociation {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       rectRates = associationList.map(() => Vector.same(0.5)),
       arrow = "none" as UndirectedEdgeArrowType,

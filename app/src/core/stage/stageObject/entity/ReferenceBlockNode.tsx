@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
 import { GenerateScreenshot } from "@/core/service/dataGenerateService/generateScreenshot";
@@ -54,7 +55,7 @@ export class ReferenceBlockNode extends ConnectableEntity implements ResizeAble 
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), new Vector(400, 200))]),
       fileName = "",
       sectionName = "",

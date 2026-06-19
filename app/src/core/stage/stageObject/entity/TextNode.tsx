@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import type { Project } from "@/core/Project";
 import { Renderer } from "@/core/render/canvas2d/renderer";
 import { NodeMoveShadowEffect } from "@/core/service/feedbackService/effectEngine/concrete/NodeMoveShadowEffect";
@@ -107,7 +108,7 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       text = "",
       details = [],
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),

@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project, ProjectState } from "@/core/Project";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -53,7 +54,7 @@ export default function AttachmentsWindow() {
             const path = await open();
             if (!path) return;
             const uuid = await Dialog.input("附件 ID", "如果不需要自定义就直接点确定", {
-              defaultValue: crypto.randomUUID(),
+              defaultValue: randomUUID(),
             });
             if (!uuid) return;
             const u8a = await readFile(path);

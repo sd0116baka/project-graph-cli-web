@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { Renderer } from "@/core/render/canvas2d/renderer";
 import { NodeMoveShadowEffect } from "@/core/service/feedbackService/effectEngine/concrete/NodeMoveShadowEffect";
@@ -84,7 +85,7 @@ export class Section extends ConnectableEntity {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       text = "",
       collisionBox = new CollisionBox([new Rectangle(new Vector(0, 0), new Vector(0, 0))]),
       _collisionBoxNormal: collisionBoxNormal = undefined as CollisionBox | undefined,

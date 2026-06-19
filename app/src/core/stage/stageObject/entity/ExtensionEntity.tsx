@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import type { Project } from "@/core/Project";
 import { Vector } from "@graphif/data-structures";
 import { id, passExtraAtArg1, passObject, serializable } from "@graphif/serializer";
@@ -43,7 +44,7 @@ export class ExtensionEntity extends ConnectableEntity {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID(),
+      uuid = randomUUID(),
       extensionId = "",
       typeName = "",
       customData = {},

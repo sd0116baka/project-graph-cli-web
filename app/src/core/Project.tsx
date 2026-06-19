@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Dialog } from "@/components/ui/dialog";
 import type { CurveRenderer } from "@/core/render/canvas2d/basicRenderer/curveRenderer";
 import type { ImageRenderer } from "@/core/render/canvas2d/basicRenderer/ImageRenderer";
@@ -474,7 +475,7 @@ export class Project extends Tab {
    */
 
   addAttachment(data: Blob) {
-    const uuid = crypto.randomUUID();
+    const uuid = randomUUID();
     this.attachments.set(uuid, data);
     return uuid;
   }

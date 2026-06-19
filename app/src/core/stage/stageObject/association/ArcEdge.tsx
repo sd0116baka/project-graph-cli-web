@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Color, Vector } from "@graphif/data-structures";
 import { Line, Rectangle } from "@graphif/shapes";
 import { id, passExtraAtArg1, passObject, serializable } from "@graphif/serializer";
@@ -374,7 +375,7 @@ export class ArcEdge extends Edge {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       sourceRectangleRate = Vector.same(0.5),
       targetRectangleRate = Vector.same(0.5),

@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Serialized } from "@/types/node";
 import { PrgMetadata } from "@/types/metadata";
 import { Path } from "@/utils/path";
@@ -597,7 +598,7 @@ export namespace ProjectUpgrader {
           const path = entity.path;
           const imageContent = await readFile(basePath.join(path).toString());
           const blob = new Blob([imageContent], { type: "image/png" });
-          const attachmentId = crypto.randomUUID();
+          const attachmentId = randomUUID();
           attachments.set(attachmentId, blob);
           data = {
             _: "ImageNode",
@@ -682,7 +683,7 @@ export namespace ProjectUpgrader {
         case "core:svg_node": {
           // svg节点，和图片一样，要处理附件
           const code = entity.content;
-          const attachmentId = crypto.randomUUID();
+          const attachmentId = randomUUID();
           const blob = new Blob([code], { type: "image/svg+xml" });
           attachments.set(attachmentId, blob);
           data = {

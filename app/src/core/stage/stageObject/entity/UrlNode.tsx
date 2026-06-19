@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { Renderer } from "@/core/render/canvas2d/renderer";
 import { NodeMoveShadowEffect } from "@/core/service/feedbackService/effectEngine/concrete/NodeMoveShadowEffect";
@@ -99,7 +100,7 @@ export class UrlNode extends ConnectableEntity {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       title = "",
       details = [],
       url = "",

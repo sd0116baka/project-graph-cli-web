@@ -1,3 +1,4 @@
+import { randomUUID } from "../../../utils/randomUUID";
 import { URI } from "vscode-uri";
 
 export namespace ServerProjectManager {
@@ -472,7 +473,7 @@ export namespace ServerProjectManager {
     }
     const existing = localStorage.getItem(clientIdStorageKey);
     if (existing) return existing;
-    const next = crypto.randomUUID();
+    const next = randomUUID();
     localStorage.setItem(clientIdStorageKey, next);
     return next;
   }

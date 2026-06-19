@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { ControllerClass } from "@/core/service/controlService/controller/ControllerClass";
 import { Settings } from "@/core/service/Settings";
@@ -271,7 +272,7 @@ export class ControllerPenStrokeDrawingClass extends ControllerClass {
 
     // 写入临时目录
     const dir = await tempDir();
-    const fileName = `${crypto.randomUUID()}.png`;
+    const fileName = `${randomUUID()}.png`;
     const filePath = await join(dir, fileName);
     await writeFile(filePath, uint8Array);
 

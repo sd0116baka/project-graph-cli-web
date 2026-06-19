@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { ConnectableEntity } from "@/core/stage/stageObject/abstract/ConnectableEntity";
 import { CollisionBox } from "@/core/stage/stageObject/collisionBox/collisionBox";
@@ -78,7 +79,7 @@ export class LatexNode extends ConnectableEntity {
   constructor(
     protected readonly project: Project,
     {
-      uuid = crypto.randomUUID(),
+      uuid = randomUUID(),
       details = [],
       latexSource = "",
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),

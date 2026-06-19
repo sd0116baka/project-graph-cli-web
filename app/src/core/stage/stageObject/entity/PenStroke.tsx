@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import type { Project } from "@/core/Project";
 import { Entity } from "@/core/stage/stageObject/abstract/StageEntity";
 import { CollisionBox } from "@/core/stage/stageObject/collisionBox/collisionBox";
@@ -69,7 +70,7 @@ export class PenStroke extends Entity {
 
   constructor(
     protected readonly project: Project,
-    { uuid = crypto.randomUUID() as string, segments = [] as PenStrokeSegment[], color = Color.White },
+    { uuid = randomUUID() as string, segments = [] as PenStrokeSegment[], color = Color.White },
   ) {
     super();
     this.uuid = uuid;

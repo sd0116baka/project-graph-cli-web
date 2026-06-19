@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
 import { Renderer } from "@/core/render/canvas2d/renderer";
 import { Settings } from "@/core/service/Settings";
@@ -48,7 +49,7 @@ export class LineEdge extends Edge {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       sourceRectangleRate = Vector.same(0.5),
       targetRectangleRate = Vector.same(0.5),

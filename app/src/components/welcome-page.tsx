@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { AssetsRepository } from "@/core/service/AssetsRepository";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
 import { onNewDraft, onOpenFile } from "@/core/service/GlobalMenu";
@@ -179,7 +180,7 @@ export default function WelcomePage() {
                       async () => {
                         const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-main-3.1.prg");
                         const dir = await tempDir();
-                        const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
+                        const path = await join(dir, `tutorial-${randomUUID()}.prg`);
                         await writeFile(path, u8a);
                         await onOpenFile(URI.file(path), "功能说明书");
                       },

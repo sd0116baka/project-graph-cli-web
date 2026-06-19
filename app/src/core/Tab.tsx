@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Dialog } from "@/components/ui/dialog";
 import { EventEmitter } from "events";
 import React from "react";
@@ -62,7 +63,7 @@ export abstract class Tab extends React.Component<Record<string, never>, Record<
    */
   loadService(service: { id?: string; new (...args: any[]): any }) {
     if (!service.id) {
-      service.id = crypto.randomUUID();
+      service.id = randomUUID();
       console.warn("[Tab] 服务 %o 未指定 ID，自动生成：%s", service, service.id);
     }
     const inst = new service(this);

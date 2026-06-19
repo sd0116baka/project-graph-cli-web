@@ -1,3 +1,4 @@
+import { randomUUID } from "@/utils/randomUUID";
 import { Dialog } from "@/components/ui/dialog";
 import {
   Menubar,
@@ -1402,7 +1403,7 @@ export function GlobalMenu() {
                     async () => {
                       const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-main-3.1.prg");
                       const dir = await tempDir();
-                      const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
+                      const path = await join(dir, `tutorial-${randomUUID()}.prg`);
                       await writeFile(path, u8a);
                       await onOpenFile(URI.file(path), "功能说明书");
                     },
@@ -1423,7 +1424,7 @@ export function GlobalMenu() {
                     async () => {
                       const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-shortcut-keys-3.1.prg");
                       const dir = await tempDir();
-                      const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
+                      const path = await join(dir, `tutorial-${randomUUID()}.prg`);
                       await writeFile(path, u8a);
                       await onOpenFile(URI.file(path), "快捷键文档");
                     },
@@ -1444,7 +1445,7 @@ export function GlobalMenu() {
                     async () => {
                       const u8a = await AssetsRepository.fetchFile("tutorials/tutorial-logic-nodes-2.9.prg");
                       const dir = await tempDir();
-                      const path = await join(dir, `tutorial-${crypto.randomUUID()}.prg`);
+                      const path = await join(dir, `tutorial-${randomUUID()}.prg`);
                       await writeFile(path, u8a);
                       await onOpenFile(URI.file(path), "逻辑节点文档");
                     },
