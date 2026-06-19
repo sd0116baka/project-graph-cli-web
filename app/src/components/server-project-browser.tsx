@@ -36,7 +36,9 @@ export function ServerProjectBrowser() {
   const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
   const [useLanBackend, setUseLanBackend] = useState(true);
   const [backendAdminUser, setBackendAdminUser] = useState(readBackendAdminUser);
-  const [backendAdminPassword, setBackendAdminPassword] = useState(readBackendAdminPassword);
+  const [backendAdminPassword, setBackendAdminPassword] = useState("");
+  const [backendAuthConfigLoaded, setBackendAuthConfigLoaded] = useState(isWeb);
+  const [backendAuthConfigExists, setBackendAuthConfigExists] = useState(false);
   const [startedBackendPort, setStartedBackendPort] = useState<number | undefined>();
   const [startedBackendAuth, setStartedBackendAuth] = useState<ServerProjectManager.BackendAuth | undefined>();
   const [lastFailure, setLastFailure] = useState<ServerProjectManager.ServerProjectErrorDetail | undefined>();
@@ -57,8 +59,14 @@ export function ServerProjectBrowser() {
   }, [useLanBackend, backendAdminUser, backendAdminPassword]);
 
   useEffect(() => {
-    void refreshProjects();
+    void refreshBackendAuthConfig();
   }, []);
+
+  useEffect(() => {
+    if (backendAuthConfigLoaded) {
+      void refreshProjects();
+    }
+  }, [backendAuthConfigLoaded]);
 
   useEffect(() => {
     const onServerError = (event: Event) => {
@@ -71,6 +79,7 @@ export function ServerProjectBrowser() {
   }, []);
 
   useEffect(() => {
+    if (!backendAuthConfigLoaded) return;
     let eventSubscription: (() => void) | undefined;
     let disposed = false;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -98,7 +107,7 @@ export function ServerProjectBrowser() {
       eventSubscription?.();
       if (refreshTimer) globalThis.clearTimeout(refreshTimer);
     };
-  }, [eventSubscriptionKey]);
+  }, [backendAuthConfigLoaded, eventSubscriptionKey]);
 
   async function refreshProjects() {
     setIsRefreshing(true);
@@ -136,6 +145,31 @@ export function ServerProjectBrowser() {
     }
   }
 
+  async function refreshBackendAuthConfig() {
+    if (isWeb) {
+      setBackendAuthConfigLoaded(true);
+      return;
+    }
+    try {
+      const config = await ServerProjectManager.getBackendAuthConfig();
+      if (config?.exists) {
+        setBackendAuthConfigExists(true);
+        setBackendAdminUser(config.user || defaultBackendAdminUser);
+        setBackendAdminPassword(config.password);
+        persistBackendAdminAuth({ user: config.user || defaultBackendAdminUser, password: config.password });
+        return;
+      }
+      setBackendAuthConfigExists(false);
+      setBackendAdminUser(config?.user || readBackendAdminUser());
+      setBackendAdminPassword("");
+      writeLocalStorage(backendAdminPasswordStorageKey, "");
+    } catch (error) {
+      reportFailure(error, "读取后端认证配置失败");
+    } finally {
+      setBackendAuthConfigLoaded(true);
+    }
+  }
+
   async function connectBackend(url = backendUrlInput) {
     applyBackendAuth();
     setIsConnecting(true);
@@ -161,8 +195,16 @@ export function ServerProjectBrowser() {
   async function startBackend() {
     const lanMode = useLanBackend;
     const auth = lanMode ? backendAdminAuth() : undefined;
+    if (lanMode && !backendAuthConfigLoaded) {
+      toast.info("正在读取后端认证配置，请稍后再试");
+      return;
+    }
     if (lanMode && !auth) {
-      toast.error("请先设置 LAN 管理员账号和密码");
+      toast.error(
+        backendAuthConfigExists
+          ? "已有后端认证配置，但没有读取到管理员密码"
+          : "首次启动 LAN 后端前，请设置管理员账号和密码",
+      );
       return;
     }
     setIsStartingBackend(true);
@@ -191,6 +233,9 @@ export function ServerProjectBrowser() {
       setServerInfo(info);
       setStartedBackendPort(info.port);
       setStartedBackendAuth(auth);
+      if (auth) {
+        setBackendAuthConfigExists(true);
+      }
       await refreshProjects();
       toast.success(`${lanMode ? "LAN" : "本机"}后端已启动，日志：${started.logPath}`);
     } catch (error) {
@@ -470,14 +515,14 @@ export function ServerProjectBrowser() {
             <Input
               value={backendAdminUser}
               placeholder="管理员账号"
-              disabled={backendModeLocked}
+              disabled={!backendAuthConfigLoaded || backendModeLocked}
               autoComplete="username"
               onChange={(event) => updateBackendAdminUser(event.target.value)}
             />
             <Input
               value={backendAdminPassword}
-              placeholder={configuredBackendAuth ? "管理员密码" : "首次设置管理员密码"}
-              disabled={backendModeLocked}
+              placeholder={backendAuthConfigExists || configuredBackendAuth ? "管理员密码" : "首次设置管理员密码"}
+              disabled={!backendAuthConfigLoaded || backendModeLocked}
               autoComplete="new-password"
               onChange={(event) => updateBackendAdminPassword(event.target.value)}
             />
@@ -644,10 +689,6 @@ const backendAdminPasswordStorageKey = "project-graph-lan-backend-admin-password
 
 function readBackendAdminUser(): string {
   return readLocalStorage(backendAdminUserStorageKey) || defaultBackendAdminUser;
-}
-
-function readBackendAdminPassword(): string {
-  return readLocalStorage(backendAdminPasswordStorageKey);
 }
 
 function createBackendAdminAuth(user: string, password: string): ServerProjectManager.BackendAuth | undefined {

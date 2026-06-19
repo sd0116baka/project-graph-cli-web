@@ -132,6 +132,7 @@ pub fn run() {
             take_pending_open_files,
             cmd::backend::project_graph_backend_registry_path,
             cmd::backend::project_graph_backend_targets,
+            cmd::backend::project_graph_backend_auth_config,
             cmd::backend::project_graph_backend_start,
             cmd::backend::project_graph_backend_stop,
             cmd::live::project_graph_live_start,

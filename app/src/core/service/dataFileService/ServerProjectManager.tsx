@@ -104,6 +104,14 @@ export namespace ServerProjectManager {
     portEnd: number;
   };
 
+  export type BackendAuthConfig = {
+    exists: boolean;
+    user: string;
+    password: string;
+    dataDir: string;
+    authPath: string;
+  };
+
   export type BackendAuth = {
     user: string;
     password: string;
@@ -185,6 +193,14 @@ export namespace ServerProjectManager {
     }
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<BackendTarget[]>("project_graph_backend_targets");
+  }
+
+  export async function getBackendAuthConfig(): Promise<BackendAuthConfig | undefined> {
+    if (!isTauriRuntime()) {
+      return undefined;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<BackendAuthConfig>("project_graph_backend_auth_config");
   }
 
   export async function startBackendDaemon(options: BackendStartOptions = {}): Promise<BackendStartResult> {

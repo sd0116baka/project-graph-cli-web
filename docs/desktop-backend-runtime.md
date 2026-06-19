@@ -51,10 +51,10 @@ Desktop backend startup searches in this order:
 
 The Desktop server-project browser can launch either backend mode:
 
-- LAN mode is the default. On first LAN startup, Desktop requires an administrator user and password. It passes those credentials to `start-web.ps1`, uses them for its own API calls, and shows them in the backend panel so another device can connect.
+- LAN mode is the default. On first LAN startup for a backend data directory, Desktop requires an administrator user and password. "First" is determined by whether that data directory already has `auth.json`. Desktop passes those credentials to `start-web.ps1`, uses them for its own API calls, and shows them in the backend panel so another device can connect.
 - Local-only mode is selected by clearing the LAN checkbox before startup. Desktop passes `-LocalOnly -NoAuth`, binds `127.0.0.1`, and does not expose the helper backend to the LAN.
 
-The administrator credentials are reused on later Desktop launches. The startup script writes the same credentials to the backend data directory's `auth.json`, so the LAN browser login, CLI automation, and Desktop API calls authenticate against one backend credential source.
+The administrator credentials are reused on later Desktop launches by reading the backend data directory's `auth.json`. The startup script writes the same credentials when Desktop first creates the file, so the LAN browser login, CLI automation, and Desktop API calls authenticate against one backend credential source.
 
 When the script is found under `backend-runtime`, Desktop startup also:
 

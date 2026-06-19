@@ -43,6 +43,22 @@ pub struct BackendStopResult {
     port_end: u16,
 }
 
+#[derive(Debug, Deserialize)]
+struct BackendAuthFile {
+    user: Option<String>,
+    password: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendAuthConfig {
+    exists: bool,
+    user: String,
+    password: String,
+    data_dir: String,
+    auth_path: String,
+}
+
 #[tauri::command]
 pub fn project_graph_backend_registry_path() -> String {
     backend_registry_path().to_string_lossy().to_string()
@@ -68,36 +84,64 @@ pub fn project_graph_backend_targets() -> Vec<Value> {
 }
 
 #[tauri::command]
+pub fn project_graph_backend_auth_config(
+    app: tauri::AppHandle,
+) -> Result<BackendAuthConfig, String> {
+    let script = backend_start_script(&app)?;
+    let data_dir = resolve_backend_data_dir(&app, &script, None, true)?;
+    let auth_path = data_dir.join("auth.json");
+    if !auth_path.is_file() {
+        return Ok(BackendAuthConfig {
+            exists: false,
+            user: "pg".to_string(),
+            password: String::new(),
+            data_dir: data_dir.to_string_lossy().to_string(),
+            auth_path: auth_path.to_string_lossy().to_string(),
+        });
+    }
+
+    let content = std::fs::read_to_string(&auth_path).map_err(|error| {
+        format!(
+            "Failed to read Project Graph backend auth config at {}: {error}",
+            auth_path.to_string_lossy()
+        )
+    })?;
+    let config: BackendAuthFile = serde_json::from_str(content.trim_start_matches('\u{feff}'))
+        .map_err(|error| {
+            format!(
+                "Failed to parse Project Graph backend auth config at {}: {error}",
+                auth_path.to_string_lossy()
+            )
+        })?;
+    let user = config
+        .user
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "pg".to_string());
+    let password = config.password.unwrap_or_default();
+    if password.is_empty() {
+        return Err(format!(
+            "Project Graph backend auth config at {} is missing a password.",
+            auth_path.to_string_lossy()
+        ));
+    }
+    Ok(BackendAuthConfig {
+        exists: true,
+        user,
+        password,
+        data_dir: data_dir.to_string_lossy().to_string(),
+        auth_path: auth_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
 pub fn project_graph_backend_start(
     app: tauri::AppHandle,
     options: Option<BackendStartOptions>,
 ) -> Result<BackendStartResult, String> {
-    let options = options.unwrap_or(BackendStartOptions {
-        port: None,
-        data_dir: None,
-        auth_user: None,
-        auth_password: None,
-        no_auth: Some(false),
-        skip_build: None,
-        local_only: Some(false),
-        log_path: None,
-    });
+    let options = options.unwrap_or_else(default_backend_start_options);
     let script = backend_start_script(&app)?;
     let resource_backed = is_backend_runtime_script(&script);
-    let data_dir = match options.data_dir.as_deref() {
-        Some(value) if !value.trim().is_empty() => Some(value.to_string()),
-        _ if resource_backed => Some(
-            app.path()
-                .app_data_dir()
-                .map_err(|error| {
-                    format!("Failed to resolve Project Graph app data directory: {error}")
-                })?
-                .join("backend-data")
-                .to_string_lossy()
-                .to_string(),
-        ),
-        _ => None,
-    };
+    let data_dir = resolve_backend_start_data_dir(&app, &script, options.data_dir.as_deref())?;
     let log_path = options
         .log_path
         .as_ref()
@@ -201,6 +245,19 @@ fn backend_registry_path() -> std::path::PathBuf {
     std::env::temp_dir().join("project-graph-backends.json")
 }
 
+fn default_backend_start_options() -> BackendStartOptions {
+    BackendStartOptions {
+        port: None,
+        data_dir: None,
+        auth_user: None,
+        auth_password: None,
+        no_auth: Some(false),
+        skip_build: None,
+        local_only: Some(false),
+        log_path: None,
+    }
+}
+
 fn backend_start_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     backend_script(app, "start-web.ps1")
 }
@@ -264,6 +321,95 @@ fn is_backend_runtime_script(path: &Path) -> bool {
             .to_string_lossy()
             .eq_ignore_ascii_case("backend-runtime")
     })
+}
+
+fn resolve_backend_start_data_dir(
+    app: &tauri::AppHandle,
+    script: &Path,
+    explicit_data_dir: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(value) = explicit_data_dir {
+        if !value.trim().is_empty() {
+            return Ok(Some(value.to_string()));
+        }
+    }
+    if is_backend_runtime_script(script) {
+        return Ok(Some(
+            app_backend_data_dir(app)?.to_string_lossy().to_string(),
+        ));
+    }
+    Ok(None)
+}
+
+fn resolve_backend_data_dir(
+    app: &tauri::AppHandle,
+    script: &Path,
+    explicit_data_dir: Option<&str>,
+    honor_runtime_metadata: bool,
+) -> Result<PathBuf, String> {
+    if let Some(value) = explicit_data_dir {
+        if !value.trim().is_empty() {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    if is_backend_runtime_script(script) {
+        return app_backend_data_dir(app);
+    }
+    let root = backend_runtime_root(script)?;
+    if honor_runtime_metadata {
+        if let Some(data_dir) = read_backend_runtime_data_dir(&root)? {
+            return Ok(data_dir);
+        }
+    }
+    Ok(root.join("server").join("data"))
+}
+
+fn app_backend_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve Project Graph app data directory: {error}"))?
+        .join("backend-data"))
+}
+
+fn backend_runtime_root(script: &Path) -> Result<PathBuf, String> {
+    let scripts_dir = script.parent().ok_or_else(|| {
+        format!(
+            "Project Graph backend script has no parent directory: {}",
+            script.to_string_lossy()
+        )
+    })?;
+    scripts_dir.parent().map(Path::to_path_buf).ok_or_else(|| {
+        format!(
+            "Project Graph backend script has no runtime root: {}",
+            script.to_string_lossy()
+        )
+    })
+}
+
+fn read_backend_runtime_data_dir(root: &Path) -> Result<Option<PathBuf>, String> {
+    let runtime_path = root.join("server").join("web-runtime.json");
+    if !runtime_path.is_file() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&runtime_path).map_err(|error| {
+        format!(
+            "Failed to read Project Graph backend runtime metadata at {}: {error}",
+            runtime_path.to_string_lossy()
+        )
+    })?;
+    let value: Value =
+        serde_json::from_str(content.trim_start_matches('\u{feff}')).map_err(|error| {
+            format!(
+                "Failed to parse Project Graph backend runtime metadata at {}: {error}",
+                runtime_path.to_string_lossy()
+            )
+        })?;
+    Ok(value
+        .get("dataDir")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from))
 }
 
 fn powershell_executable() -> &'static str {
