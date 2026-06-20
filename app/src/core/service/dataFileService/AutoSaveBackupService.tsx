@@ -5,8 +5,7 @@ import { exists, writeFile, readDir, stat, remove, mkdir } from "@tauri-apps/plu
 import { Settings } from "@/core/service/Settings";
 import { toast } from "sonner";
 import { PathString } from "@/utils/pathString";
-import { isTauriRuntime } from "@/utils/runtime";
-import { ServerProjectManager } from "./ServerProjectManager";
+import { ProjectRuntimeActions } from "@/core/runtime/ProjectRuntimeActions";
 
 /**
  * 自动保存与备份系统
@@ -69,7 +68,7 @@ export class AutoSaveBackupService {
     }
 
     if (this.project.uri.scheme === "server") {
-      const ok = await this.backupServerProject(false);
+      const ok = await this.backupRuntimeProject(false);
       if (ok) {
         this.lastBackupHash = currentHash;
       }
@@ -177,7 +176,7 @@ export class AutoSaveBackupService {
 
   public async manualBackup() {
     if (this.project.uri.scheme === "server") {
-      await this.backupServerProject(true);
+      await this.backupRuntimeProject(true);
       return;
     }
 
@@ -338,20 +337,19 @@ export class AutoSaveBackupService {
   }
 
   private canUseLocalBackup(): boolean {
-    return isTauriRuntime();
+    return ProjectRuntimeActions.canUseLocalProjectFileSystem(this.project);
   }
 
-  private async backupServerProject(showSuccess: boolean): Promise<boolean> {
+  private async backupRuntimeProject(showSuccess: boolean): Promise<boolean> {
     try {
-      const projectId = ServerProjectManager.projectIdFromUri(this.project.uri);
-      const fileContent = await this.project.getFileContent({ includeThumbnail: false });
-      const backup = await ServerProjectManager.createProjectBackup(projectId, fileContent);
+      const backup = await ProjectRuntimeActions.createBackup(this.project);
       if (showSuccess) {
-        toast.success(`服务器备份已创建：${new Date(backup.createdAt).toLocaleString()}`);
+        const createdAt = backup.createdAt ? new Date(backup.createdAt).toLocaleString() : backup.revision;
+        toast.success(`服务器备份已创建：${createdAt}`);
       }
       return true;
     } catch (error) {
-      toast.error(`服务器备份失败: ${ServerProjectManager.formatError(error)}`);
+      toast.error(`服务器备份失败: ${ProjectRuntimeActions.formatError(error)}`);
       return false;
     }
   }
