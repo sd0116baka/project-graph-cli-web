@@ -16,6 +16,7 @@ import {
 import { Extension } from "@/core/extension/Extension";
 import { loadAllServicesAfterInit, loadAllServicesBeforeInit } from "@/core/loadAllServices";
 import { Project, ProjectState } from "@/core/Project";
+import { ProjectRuntimeActions } from "@/core/runtime/ProjectRuntimeActions";
 import { TabFactory } from "@/core/TabFactory";
 import { TestTab } from "@/core/TestTab";
 import { activeTabAtom, isClassroomModeAtom, isDevAtom, store, tabsAtom } from "@/state";
@@ -40,7 +41,6 @@ import ReferencesWindow from "@/sub/ReferencesWindow";
 import SettingsWindow from "@/sub/SettingsWindow";
 import TagWindow from "@/sub/TagWindow";
 import TestWindow from "@/sub/TestWindow";
-import { openTextImportWindow } from "@/sub/TextImportWindow";
 import { getAppVersion, getDeviceId } from "@/utils/otherApi";
 import { PathString } from "@/utils/pathString";
 import { isMac } from "@/utils/platform";
@@ -151,7 +151,6 @@ import { KeyBindsUI } from "./controlService/shortcutKeysEngine/KeyBindsUI";
 import { useKeyBind } from "./controlService/shortcutKeysEngine/useKeyBind";
 import { RecentFileManager } from "./dataFileService/RecentFileManager";
 import { generateKeyboardLayout } from "./dataGenerateService/generateFromFolderEngine/GenerateFromFolderEngine";
-import { DragFileIntoStageEngine } from "./dataManageService/dragFileIntoStageEngine/dragFileIntoStageEngine";
 import { FeatureFlags } from "./FeatureFlags";
 import { Settings } from "./Settings";
 import { SubWindow } from "./SubWindow";
@@ -232,6 +231,22 @@ export function GlobalMenu() {
     setIsDev(ver.includes("dev"));
   }
 
+  async function runProjectRuntimeAction(action: () => Promise<void>, shouldRefresh = false) {
+    try {
+      await action();
+      if (shouldRefresh) {
+        await refresh();
+      }
+    } catch (error) {
+      if (!ProjectRuntimeActions.isRuntimeActionError(error)) {
+        throw error;
+      }
+      toast.error(ProjectRuntimeActions.formatError(error), {
+        description: ProjectRuntimeActions.recoveryHint(error),
+      });
+    }
+  }
+
   return (
     <Menubar className="shrink-0">
       {/* 文件 */}
@@ -276,7 +291,7 @@ export function GlobalMenu() {
           </Item>
           <Item
             disabled={!activeProject || activeProject.isDraft}
-            onClick={() => openCurrentProjectFolder(activeProject!)}
+            onClick={() => runProjectRuntimeAction(() => openCurrentProjectFolder(activeProject!))}
           >
             <FolderOpen />
             打开当前工程文件所在文件夹
@@ -346,16 +361,7 @@ export function GlobalMenu() {
           </Item>
           <Item
             disabled={!activeProject}
-            onClick={async () => {
-              const path = await save({
-                title: t("file.saveAs"),
-                filters: [{ name: "Project Graph", extensions: ["prg"] }],
-              });
-              if (!path) return;
-              activeProject!.uri = URI.file(path);
-              await RecentFileManager.addRecentFileByUri(activeProject!.uri);
-              await activeProject!.save();
-            }}
+            onClick={() => runProjectRuntimeAction(() => ProjectRuntimeActions.saveAs(activeProject!), true)}
           >
             <FileDown />
             {t("file.saveAs")}
@@ -398,39 +404,18 @@ export function GlobalMenu() {
             <SubContent>
               <Item
                 disabled={!activeProject}
-                onClick={async () => {
-                  const path = await open({
-                    title: "打开文件夹",
-                    directory: true,
-                    multiple: false,
-                    filters: [],
-                  });
-                  console.log(path);
-                  if (!path) {
-                    return;
-                  }
-                  activeProject!.generateFromFolder.generateFromFolder(path);
-                }}
+                onClick={() =>
+                  runProjectRuntimeAction(() => ProjectRuntimeActions.importFolderToStage(activeProject!, "section"))
+                }
               >
                 <FolderTree />
                 {t("file.importFromFolder")}
               </Item>
               <Item
                 disabled={!activeProject}
-                onClick={async () => {
-                  const path = await open({
-                    title: "打开文件夹",
-                    directory: true,
-                    multiple: false,
-                    filters: [],
-                  });
-                  if (!path) {
-                    return;
-                  }
-                  if (typeof path === "string") {
-                    activeProject!.generateFromFolder.generateTreeFromFolder(path);
-                  }
-                }}
+                onClick={() =>
+                  runProjectRuntimeAction(() => ProjectRuntimeActions.importFolderToStage(activeProject!, "tree"))
+                }
               >
                 <FolderTree />
                 {t("file.importTreeFromFolder")}
@@ -447,58 +432,27 @@ export function GlobalMenu() {
               </Item>
               <Item
                 disabled={!activeProject}
-                onClick={async () => {
-                  const pathList = await open({
-                    title: "打开文件",
-                    directory: false,
-                    multiple: true,
-                    filters: [{ name: "图片文件", extensions: ["png", "jpg", "jpeg", "webp"] }],
-                  });
-                  console.log(pathList);
-                  if (!pathList) {
-                    return;
-                  }
-                  for (const path of pathList) {
-                    const ext = path.split(".").pop()?.toLowerCase() ?? "png";
-                    const mimeMap: Record<string, string> = {
-                      png: "image/png",
-                      jpg: "image/jpeg",
-                      jpeg: "image/jpeg",
-                      webp: "image/webp",
-                    };
-                    DragFileIntoStageEngine.handleDropImage(activeProject!, path, mimeMap[ext] ?? "image/png");
-                  }
-                }}
+                onClick={() =>
+                  runProjectRuntimeAction(() => ProjectRuntimeActions.importFilesToStage(activeProject!, "image"))
+                }
               >
                 <Images />
                 导入图片（PNG/JPG/WEBP）
               </Item>
               <Item
                 disabled={!activeProject}
-                onClick={async () => {
-                  const pathList = await open({
-                    title: "打开文件",
-                    directory: false,
-                    multiple: true,
-                    filters: [{ name: "*", extensions: ["svg"] }],
-                  });
-                  console.log(pathList);
-                  if (!pathList) {
-                    return;
-                  }
-                  for (const path of pathList) {
-                    DragFileIntoStageEngine.handleDropSvg(activeProject!, path);
-                  }
-                }}
+                onClick={() =>
+                  runProjectRuntimeAction(() => ProjectRuntimeActions.importFilesToStage(activeProject!, "svg"))
+                }
               >
                 <Images />
                 导入SVG图片
               </Item>
               <Item
                 disabled={!activeProject}
-                onClick={() => {
-                  openTextImportWindow();
-                }}
+                onClick={() =>
+                  runProjectRuntimeAction(() => ProjectRuntimeActions.importFilesToStage(activeProject!, "text"))
+                }
               >
                 <FileText />
                 导入文本文件
@@ -1734,7 +1688,7 @@ export function GlobalMenu() {
 }
 
 export function openCurrentProjectFolder(project: Project) {
-  shellOpen(PathString.dirPath(project.uri.fsPath));
+  return ProjectRuntimeActions.revealProjectLocation(project);
 }
 
 export async function onNewDraft() {

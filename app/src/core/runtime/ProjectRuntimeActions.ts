@@ -1,11 +1,14 @@
 import type { Project } from "@/core/Project";
 import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import { isTauriRuntime } from "@/utils/runtime";
+import { URI } from "vscode-uri";
 
 export namespace ProjectRuntimeActions {
   export type RuntimeKind = "tauri" | "server" | "browser";
 
   export type ImportFileKind = "image" | "svg" | "text";
+
+  export type FolderImportMode = "section" | "tree";
 
   export type FolderSource =
     | { kind: "tauri-path"; path: string }
@@ -31,6 +34,7 @@ export namespace ProjectRuntimeActions {
     saveAs: boolean;
     revealProjectLocation: boolean;
     importFilesToStage: boolean;
+    importFolderToStage: boolean;
     exportBlob: boolean;
     scanFolderForStage: boolean;
   };
@@ -46,6 +50,7 @@ export namespace ProjectRuntimeActions {
     saveAs(context: ProjectActionContext): Promise<void>;
     revealProjectLocation(context: ProjectActionContext): Promise<void>;
     importFilesToStage(context: ProjectActionContext, kind: ImportFileKind): Promise<void>;
+    importFolderToStage(context: ProjectActionContext, mode: FolderImportMode): Promise<void>;
     exportBlob(context: ProjectActionContext, blob: Blob, suggestedName: string): Promise<void>;
     scanFolderForStage(context: ProjectActionContext, source: FolderSource): Promise<FolderEntry>;
   };
@@ -95,6 +100,22 @@ export namespace ProjectRuntimeActions {
     return resolve(project).createBackup({ project });
   }
 
+  export async function saveAs(project: Project): Promise<void> {
+    return resolve(project).saveAs({ project });
+  }
+
+  export async function revealProjectLocation(project: Project): Promise<void> {
+    return resolve(project).revealProjectLocation({ project });
+  }
+
+  export async function importFilesToStage(project: Project, kind: ImportFileKind): Promise<void> {
+    return resolve(project).importFilesToStage({ project }, kind);
+  }
+
+  export async function importFolderToStage(project: Project, mode: FolderImportMode): Promise<void> {
+    return resolve(project).importFolderToStage({ project }, mode);
+  }
+
   export function formatError(error: unknown): string {
     if (error instanceof ProjectRuntimeActionError) {
       return error.message;
@@ -107,6 +128,10 @@ export namespace ProjectRuntimeActions {
       return error.recovery;
     }
     return ServerProjectManager.recoveryHint(error);
+  }
+
+  export function isRuntimeActionError(error: unknown): error is ProjectRuntimeActionError {
+    return error instanceof ProjectRuntimeActionError;
   }
 
   const serverProjectActions: ProjectRuntimeActionSet = {
@@ -132,7 +157,12 @@ export namespace ProjectRuntimeActions {
       "revealProjectLocation",
       "服务器项目的位置在后端机器上，不能直接打开本机文件夹。",
     ),
-    importFilesToStage: unsupported("server", "importFilesToStage", "服务器项目导入文件还没有接入运行时适配层。"),
+    importFilesToStage: unsupported(
+      "server",
+      "importFilesToStage",
+      "服务器项目导入文件需要后端导入 API 或浏览器文件上传通道。",
+    ),
+    importFolderToStage: unsupported("server", "importFolderToStage", "服务器项目从文件夹生成需要后端扫描 API。"),
     exportBlob: unsupported("server", "exportBlob", "服务器项目导出还没有接入运行时适配层。"),
     scanFolderForStage: unsupported("server", "scanFolderForStage", "服务器项目文件夹扫描需要后端 API。"),
   };
@@ -143,9 +173,71 @@ export namespace ProjectRuntimeActions {
       return tauriCapabilities;
     },
     createBackup: unsupported("tauri", "createBackup", "本地项目备份仍由现有桌面备份流程处理。"),
-    saveAs: unsupported("tauri", "saveAs", "本地项目另存为还没有接入运行时适配层。"),
-    revealProjectLocation: unsupported("tauri", "revealProjectLocation", "打开项目位置还没有接入运行时适配层。"),
-    importFilesToStage: unsupported("tauri", "importFilesToStage", "本地项目导入文件还没有接入运行时适配层。"),
+    async saveAs({ project }) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { RecentFileManager } = await import("@/core/service/dataFileService/RecentFileManager");
+      const path = await save({
+        title: "另存为",
+        filters: [{ name: "Project Graph", extensions: ["prg"] }],
+      });
+      if (!path) return;
+      project.uri = URI.file(path);
+      await RecentFileManager.addRecentFileByUri(project.uri);
+      await project.save();
+    },
+    async revealProjectLocation({ project }) {
+      if (!project.uri || project.isDraft || project.uri.scheme !== "file") {
+        throw unsupportedError("tauri", "revealProjectLocation", "只有已保存的本地项目才能打开所在文件夹。");
+      }
+      const { open } = await import("@tauri-apps/plugin-shell");
+      const { PathString } = await import("@/utils/pathString");
+      await open(PathString.dirPath(project.uri.fsPath));
+    },
+    async importFilesToStage({ project }, kind) {
+      if (kind === "text") {
+        const { openTextImportWindow } = await import("@/sub/TextImportWindow");
+        openTextImportWindow();
+        return;
+      }
+
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { DragFileIntoStageEngine } =
+        await import("@/core/service/dataManageService/dragFileIntoStageEngine/dragFileIntoStageEngine");
+      const pathList = await open({
+        title: "打开文件",
+        directory: false,
+        multiple: true,
+        filters:
+          kind === "image"
+            ? [{ name: "图片文件", extensions: ["png", "jpg", "jpeg", "webp"] }]
+            : [{ name: "*", extensions: ["svg"] }],
+      });
+      if (!pathList) return;
+
+      const paths = Array.isArray(pathList) ? pathList : [pathList];
+      for (const [index, path] of paths.entries()) {
+        if (kind === "image") {
+          await DragFileIntoStageEngine.handleDropImage(project, path, imageMimeFromPath(path), index);
+        } else {
+          await DragFileIntoStageEngine.handleDropSvg(project, path);
+        }
+      }
+    },
+    async importFolderToStage({ project }, mode) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const path = await open({
+        title: "打开文件夹",
+        directory: true,
+        multiple: false,
+        filters: [],
+      });
+      if (!path || typeof path !== "string") return;
+      if (mode === "section") {
+        await project.generateFromFolder.generateFromFolder(path);
+      } else {
+        await project.generateFromFolder.generateTreeFromFolder(path);
+      }
+    },
     exportBlob: unsupported("tauri", "exportBlob", "本地项目导出还没有接入运行时适配层。"),
     scanFolderForStage: unsupported("tauri", "scanFolderForStage", "本地项目文件夹扫描还没有接入运行时适配层。"),
   };
@@ -158,7 +250,8 @@ export namespace ProjectRuntimeActions {
     createBackup: unsupported("browser", "createBackup", unsupportedBrowserLocalBackupMessage),
     saveAs: unsupported("browser", "saveAs", "浏览器本地另存为还没有接入运行时适配层。"),
     revealProjectLocation: unsupported("browser", "revealProjectLocation", "浏览器不能打开本机项目所在文件夹。"),
-    importFilesToStage: unsupported("browser", "importFilesToStage", "浏览器导入文件还没有接入运行时适配层。"),
+    importFilesToStage: unsupported("browser", "importFilesToStage", "浏览器导入文件需要 File API 通道。"),
+    importFolderToStage: unsupported("browser", "importFolderToStage", "浏览器从文件夹生成需要目录选择或上传通道。"),
     exportBlob: unsupported("browser", "exportBlob", "浏览器导出还没有接入运行时适配层。"),
     scanFolderForStage: unsupported("browser", "scanFolderForStage", "浏览器文件夹扫描还没有接入运行时适配层。"),
   };
@@ -168,15 +261,17 @@ export namespace ProjectRuntimeActions {
     saveAs: false,
     revealProjectLocation: false,
     importFilesToStage: false,
+    importFolderToStage: false,
     exportBlob: false,
     scanFolderForStage: false,
   };
 
   const tauriCapabilities: ProjectRuntimeCapabilities = {
     backup: false,
-    saveAs: false,
-    revealProjectLocation: false,
-    importFilesToStage: false,
+    saveAs: true,
+    revealProjectLocation: true,
+    importFilesToStage: true,
+    importFolderToStage: true,
     exportBlob: false,
     scanFolderForStage: false,
   };
@@ -186,6 +281,7 @@ export namespace ProjectRuntimeActions {
     saveAs: false,
     revealProjectLocation: false,
     importFilesToStage: false,
+    importFolderToStage: false,
     exportBlob: false,
     scanFolderForStage: false,
   };
@@ -209,16 +305,21 @@ export namespace ProjectRuntimeActions {
     action: TAction,
     message: string,
   ): ProjectRuntimeActionSet[TAction] {
-    return (() =>
-      Promise.reject(
-        new ProjectRuntimeActionError({
-          code: "unsupported_project_action",
-          action,
-          runtime,
-          message,
-          recovery: "这个入口会在后续 Project Runtime Adapter 迁移中接入。",
-        }),
-      )) as ProjectRuntimeActionSet[TAction];
+    return (() => Promise.reject(unsupportedError(runtime, action, message))) as ProjectRuntimeActionSet[TAction];
+  }
+
+  function unsupportedError<TAction extends ProjectRuntimeActionName>(
+    runtime: RuntimeKind,
+    action: TAction,
+    message: string,
+  ): ProjectRuntimeActionError {
+    return new ProjectRuntimeActionError({
+      code: "unsupported_project_action",
+      action,
+      runtime,
+      message,
+      recovery: "这个入口会在后续 Project Runtime Adapter 迁移中接入。",
+    });
   }
 
   async function readServerCapabilities(): Promise<ProjectRuntimeCapabilities> {
@@ -232,5 +333,12 @@ export namespace ProjectRuntimeActions {
   function capabilityToAction(capability: keyof ProjectRuntimeCapabilities): ProjectRuntimeActionName {
     if (capability === "backup") return "createBackup";
     return capability;
+  }
+
+  function imageMimeFromPath(path: string): string {
+    const ext = path.split(".").pop()?.toLowerCase();
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "webp") return "image/webp";
+    return "image/png";
   }
 }

@@ -1,5 +1,6 @@
 import { Dialog } from "@/components/ui/dialog";
 import { Project, ProjectState } from "@/core/Project";
+import { ProjectRuntimeActions } from "@/core/runtime/ProjectRuntimeActions";
 import { MouseLocation } from "@/core/service/controlService/MouseLocation";
 import { ViewFlashEffect } from "@/core/service/feedbackService/effectEngine/concrete/ViewFlashEffect";
 import { ViewOutlineFlashEffect } from "@/core/service/feedbackService/effectEngine/concrete/ViewOutlineFlashEffect";
@@ -1267,14 +1268,23 @@ export const allKeyBinds: KeyBindItem[] = [
     defaultKey: "C-S-l",
     icon: Folder,
     when: whenHasProject,
-    onPress: () => {
+    onPress: async () => {
       const tab = store.get(activeTabAtom);
       const activeProject = tab instanceof Project ? tab : undefined;
       if (!activeProject || activeProject.isDraft) {
         toast.error("当前没有可用的工程文件");
         return;
       }
-      openCurrentProjectFolder(activeProject);
+      try {
+        await openCurrentProjectFolder(activeProject);
+      } catch (error) {
+        if (!ProjectRuntimeActions.isRuntimeActionError(error)) {
+          throw error;
+        }
+        toast.error(ProjectRuntimeActions.formatError(error), {
+          description: ProjectRuntimeActions.recoveryHint(error),
+        });
+      }
     },
   },
 

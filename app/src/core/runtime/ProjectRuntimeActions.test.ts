@@ -81,6 +81,7 @@ describe("ProjectRuntimeActions", () => {
       backup: false,
       saveAs: false,
       importFilesToStage: false,
+      importFolderToStage: false,
       exportBlob: false,
     });
     const backup = ProjectRuntimeActions.createBackup(project);
@@ -88,6 +89,30 @@ describe("ProjectRuntimeActions", () => {
     await expect(backup).rejects.toMatchObject({
       code: "unsupported_project_action",
       recovery: "这个入口会在后续 Project Runtime Adapter 迁移中接入。",
+    });
+    await expect(ProjectRuntimeActions.saveAs(project)).rejects.toMatchObject({
+      detail: {
+        action: "saveAs",
+        runtime: "browser",
+      },
+    });
+    await expect(ProjectRuntimeActions.revealProjectLocation(project)).rejects.toMatchObject({
+      detail: {
+        action: "revealProjectLocation",
+        runtime: "browser",
+      },
+    });
+    await expect(ProjectRuntimeActions.importFolderToStage(project, "tree")).rejects.toMatchObject({
+      detail: {
+        action: "importFolderToStage",
+        runtime: "browser",
+      },
+    });
+    await expect(ProjectRuntimeActions.importFilesToStage(project, "image")).rejects.toMatchObject({
+      detail: {
+        action: "importFilesToStage",
+        runtime: "browser",
+      },
     });
   });
 
@@ -100,13 +125,15 @@ describe("ProjectRuntimeActions", () => {
     expect(actions.kind).toBe("tauri");
     await expect(actions.capabilities(project)).resolves.toMatchObject({
       backup: false,
-      saveAs: false,
-      revealProjectLocation: false,
+      saveAs: true,
+      revealProjectLocation: true,
+      importFilesToStage: true,
+      importFolderToStage: true,
       scanFolderForStage: false,
     });
-    const saveAs = actions.saveAs({ project });
-    expect(saveAs).toBeInstanceOf(Promise);
-    await expect(saveAs).rejects.toMatchObject({
+    const backup = ProjectRuntimeActions.createBackup(project);
+    expect(backup).toBeInstanceOf(Promise);
+    await expect(backup).rejects.toMatchObject({
       code: "unsupported_project_action",
     });
   });
@@ -123,6 +150,38 @@ describe("ProjectRuntimeActions", () => {
       backup: true,
       saveAs: false,
       revealProjectLocation: false,
+      importFolderToStage: false,
+    });
+    await expect(ProjectRuntimeActions.saveAs(project)).rejects.toMatchObject({
+      detail: {
+        action: "saveAs",
+        runtime: "server",
+      },
+    });
+    await expect(ProjectRuntimeActions.revealProjectLocation(project)).rejects.toMatchObject({
+      detail: {
+        action: "revealProjectLocation",
+        runtime: "server",
+      },
+    });
+  });
+
+  it("reports visible unsupported errors for server-owned file menu actions", async () => {
+    vi.spyOn(ServerProjectManager, "getServerInfo").mockResolvedValue(serverInfo({ backup: true }));
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    await expect(ProjectRuntimeActions.importFolderToStage(project, "section")).rejects.toMatchObject({
+      code: "unsupported_project_action",
+      detail: {
+        action: "importFolderToStage",
+        runtime: "server",
+      },
+    });
+    await expect(ProjectRuntimeActions.importFilesToStage(project, "image")).rejects.toMatchObject({
+      detail: {
+        action: "importFilesToStage",
+        runtime: "server",
+      },
     });
   });
 });
