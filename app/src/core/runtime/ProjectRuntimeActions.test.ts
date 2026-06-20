@@ -4,12 +4,54 @@ import { URI } from "vscode-uri";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectRuntimeActions } from "./ProjectRuntimeActions";
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
+const browserFileDialogMock = vi.hoisted(() => ({
+  downloadBrowserBlob: vi.fn(),
+  extensionAccept: vi.fn((extensions: string[]) => extensions.map((extension) => `.${extension}`).join(",")),
+  pickBrowserDirectory: vi.fn(),
+  pickBrowserFiles: vi.fn(),
+}));
+
+const stageFileImportServiceMock = vi.hoisted(() => ({
+  importBrowserFiles: vi.fn(),
+  textFileExtensions: vi.fn(() => ["txt", "md"]),
+}));
+
+const textFileImporterMock = vi.hoisted(() => ({
+  importTextFilesFromFiles: vi.fn(),
+}));
+
+const tauriDialogMock = vi.hoisted(() => ({
+  moduleLoads: 0,
   save: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-fs", () => ({
+const tauriFsMock = vi.hoisted(() => ({
+  moduleLoads: 0,
   writeFile: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => {
+  tauriDialogMock.moduleLoads++;
+  return {
+    save: tauriDialogMock.save,
+  };
+});
+
+vi.mock("@tauri-apps/plugin-fs", () => {
+  tauriFsMock.moduleLoads++;
+  return {
+    writeFile: tauriFsMock.writeFile,
+  };
+});
+
+vi.mock("@/utils/browserFileDialog", () => browserFileDialogMock);
+
+vi.mock("@/core/service/dataManageService/StageFileImportService", () => ({
+  StageFileImportService: stageFileImportServiceMock,
+}));
+
+vi.mock("@/core/service/dataGenerateService/TextFileImporter", () => ({
+  TextFileImporter: textFileImporterMock,
 }));
 
 function serverInfo(capabilities: Record<string, boolean> = {}): ServerProjectManager.ServerInfo {
@@ -180,6 +222,40 @@ describe("ProjectRuntimeActions", () => {
       exportBlob: true,
       scanFolderForStage: true,
     });
+  });
+
+  it("keeps browser menu import, export, and backup actions away from Tauri modules", async () => {
+    tauriDialogMock.moduleLoads = 0;
+    tauriFsMock.moduleLoads = 0;
+    const imageFile = new File(["image"], "cover.png", { type: "image/png" });
+    browserFileDialogMock.pickBrowserFiles.mockResolvedValue([imageFile]);
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    await ProjectRuntimeActions.importFilesToStage(project, "image");
+
+    expect(browserFileDialogMock.pickBrowserFiles).toHaveBeenCalledWith({
+      accept: ".png,.jpg,.jpeg,.webp",
+      multiple: true,
+    });
+    expect(stageFileImportServiceMock.importBrowserFiles).toHaveBeenCalledWith(project, [imageFile]);
+
+    const exportedBlob = new Blob(["<svg />"], { type: "image/svg+xml" });
+    const exportResult = await ProjectRuntimeActions.exportBlob(project, exportedBlob, "graph.svg");
+
+    expect(exportResult).toEqual({ runtime: "browser", status: "exported" });
+    expect(browserFileDialogMock.downloadBrowserBlob).toHaveBeenCalledWith(exportedBlob, "graph.svg");
+    await expect(
+      ProjectRuntimeActions.createBackup(fakeProject(URI.file("C:/projects/local.prg"))),
+    ).rejects.toMatchObject({
+      detail: {
+        action: "createBackup",
+        runtime: "browser",
+      },
+    });
+    expect(tauriDialogMock.moduleLoads).toBe(0);
+    expect(tauriFsMock.moduleLoads).toBe(0);
+    expect(tauriDialogMock.save).not.toHaveBeenCalled();
+    expect(tauriFsMock.writeFile).not.toHaveBeenCalled();
   });
 
   it("routes server folder imports through the backend folder scanner", async () => {

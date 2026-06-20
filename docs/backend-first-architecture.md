@@ -40,6 +40,23 @@ Clients may cache display state and in-flight edits for responsiveness, but proj
 
 Direct local file editing remains supported for compatibility, import/export, and recovery. Shared workflows should prefer backend-managed projects.
 
+## Project Runtime Capability Matrix
+
+Project operations go through `ProjectRuntimeActions`. UI commands should ask for an operation such as backup, import, export, reveal, or folder scan; they should not decide directly whether to call Tauri, browser APIs, or the backend.
+
+| Capability               | Desktop local `.prg`                        | Web browser session                                 | Server-managed project                                      |
+| ------------------------ | ------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------- |
+| Project read/write       | Local filesystem provider                   | Backend API for `server:` projects                  | Backend API is source of truth                              |
+| Manual backup            | Existing Desktop backup service             | Unsupported for browser-local files                 | `POST /api/projects/:id/backups`                            |
+| File import              | Tauri file dialog and local file reads      | Browser `File` picker, then project write via API   | Browser upload path now; explicit backend import API later  |
+| Folder scan              | Tauri local folder scanner                  | Browser directory upload converted to `FolderEntry` | Backend machine path scan only when explicitly requested    |
+| SVG / PNG export         | Produce `Blob`, then Tauri save dialog      | Produce `Blob`, then browser download               | Client-side export by default; backend-path export explicit |
+| Reveal project location  | Tauri shell open for saved local files      | Unsupported                                         | Unsupported; location belongs to backend machine            |
+| Reference project lookup | Local same-folder reference compatibility   | Server reference index for `server:` projects       | `references.json` index in backend data directory           |
+| Desktop backend control  | Tauri invoke for embedded backend lifecycle | Not available                                       | Backend exposes HTTP API and event stream                   |
+
+The target boundary is strict: only runtime adapters and clearly Desktop-only infrastructure may import `@tauri-apps/*`. Existing direct imports outside that boundary are tracked migration debt and should be reduced when related features are touched.
+
 ## Public Runtime Concepts
 
 ### Backend Target

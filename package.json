@@ -37,6 +37,7 @@
     "prepare": "husky",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
+    "audit:tauri-imports": "node scripts/audit-tauri-imports.mjs",
     "format": "prettier --write .",
     "test": "vitest",
     "tauri": "pnpm --filter @graphif/project-graph tauri",

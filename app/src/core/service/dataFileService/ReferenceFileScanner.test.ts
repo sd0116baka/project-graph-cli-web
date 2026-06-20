@@ -10,24 +10,6 @@ const tauriFsMock = vi.hoisted(() => ({
   readDir: vi.fn(),
 }));
 
-vi.mock("@/utils/pathString", () => ({
-  PathString: {
-    dirPath(path: string) {
-      return path.replace(/[\\/][^\\/]*$/, "");
-    },
-    getFileNameFromPath(path: string) {
-      return path
-        .replace(/\\/g, "/")
-        .split("/")
-        .pop()!
-        .replace(/\.prg$/i, "");
-    },
-    getSep() {
-      return "\\";
-    },
-  },
-}));
-
 vi.mock("@tauri-apps/plugin-fs", () => tauriFsMock);
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -61,6 +43,8 @@ describe("ReferenceFileScanner", () => {
     expect(uri?.toString()).toBe(ServerProjectManager.projectUri("target-project").toString());
     expect(ServerProjectManager.resolveProjectReference).toHaveBeenCalledWith("source-project", "Design Notes");
     expect(listProjects).not.toHaveBeenCalled();
+    expect(tauriFsMock.exists).not.toHaveBeenCalled();
+    expect(tauriFsMock.readDir).not.toHaveBeenCalled();
   });
 
   it("can ensure server project references without creating local file URIs", async () => {
@@ -79,6 +63,8 @@ describe("ReferenceFileScanner", () => {
     expect(reference.created).toBe(true);
     expect(reference.uri.toString()).toBe(ServerProjectManager.projectUri("target-project").toString());
     expect(reference.uri.scheme).toBe("server");
+    expect(tauriFsMock.exists).not.toHaveBeenCalled();
+    expect(tauriFsMock.readDir).not.toHaveBeenCalled();
   });
 
   it("does not resolve arbitrary same-name server projects outside the source reference index", async () => {

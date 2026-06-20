@@ -21,7 +21,6 @@
 
 import type { Project } from "@/core/Project";
 import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
-import { PathString } from "@/utils/pathString";
 import { URI } from "vscode-uri";
 
 export namespace ReferenceFileScanner {
@@ -52,9 +51,8 @@ export namespace ReferenceFileScanner {
    * 规则：与 .prg 文件同目录、同名（不含扩展名）的子文件夹
    */
   export function getReferenceFolderPath(projectPath: string): string {
-    const dir = PathString.dirPath(projectPath);
-    const fileName = PathString.getFileNameFromPath(projectPath);
-    return `${dir}${PathString.getSep()}${fileName}`;
+    const { dir, fileName, sep } = splitFilePath(projectPath);
+    return dir ? `${dir}${sep}${fileName}` : fileName;
   }
 
   /**
@@ -159,7 +157,7 @@ export namespace ReferenceFileScanner {
    */
   export function getNewFilePath(projectPath: string, fileName: string): string {
     const folderPath = getReferenceFolderPath(projectPath);
-    return `${folderPath}${PathString.getSep()}${fileName}.prg`;
+    return `${folderPath}${pathSeparator(folderPath)}${fileName}.prg`;
   }
 
   /**
@@ -208,5 +206,22 @@ export namespace ReferenceFileScanner {
   async function pathExists(path: string): Promise<boolean> {
     const { exists } = await import("@tauri-apps/plugin-fs");
     return exists(path);
+  }
+
+  function splitFilePath(projectPath: string): { dir: string; fileName: string; sep: string } {
+    const sep = pathSeparator(projectPath);
+    const lastSlash = Math.max(projectPath.lastIndexOf("/"), projectPath.lastIndexOf("\\"));
+    const file = lastSlash >= 0 ? projectPath.slice(lastSlash + 1) : projectPath;
+    const dot = file.lastIndexOf(".");
+    const fileName = dot > 0 ? file.slice(0, dot) : file;
+    return {
+      dir: lastSlash >= 0 ? projectPath.slice(0, lastSlash) : "",
+      fileName,
+      sep,
+    };
+  }
+
+  function pathSeparator(path: string): string {
+    return path.lastIndexOf("\\") > path.lastIndexOf("/") ? "\\" : "/";
   }
 }

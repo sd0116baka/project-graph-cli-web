@@ -15,6 +15,8 @@ Project Graph is a desktop application designed to visualize and manage complex 
   - Ensure errors propagate to the top of DOM (eg. `window`), so `ErrorHandler` component can catch it and show an user-friendly dialog
   - Example: avoid `try { something() } catch (e) { console.error(e) }` - use `something()` instead
 - Always use `something.tsx` instead of a single `index.tsx` in a directory.
+- 项目文件相关动作必须优先扩展 `ProjectRuntimeActions` / runtime adapter，再由 UI 调用语义化动作；不要在菜单、窗口或 service 里直接新增 `@tauri-apps/*` 调用来区分 Desktop/Web。
+- 只有 runtime adapter、本地文件系统 provider、Desktop 启动/窗口/快捷键/扩展宿主等明确 Desktop-only 基础设施可以直接使用 `@tauri-apps/*`。新增或移动直接 import 前先运行 `pnpm run audit:tauri-imports`。
 
 ## Tech-stack
 
