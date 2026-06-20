@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -40,7 +40,7 @@ describe("@graphif/project-graph-web-server", () => {
       port: server.port,
       authEnabled: false,
       customDataDir: true,
-      capabilities: { import: true, validate: true, events: true },
+      capabilities: { import: true, validate: true, events: true, scanFolderForStage: false },
     });
     expect(info.body.dataDirName).toContain("project-graph-web-server-test-");
 
@@ -109,6 +109,63 @@ describe("@graphif/project-graph-web-server", () => {
     });
     expect(patch.response.status).toBe(200);
     expect(patch.body).toMatchObject({ ok: true, revisionToken: expect.any(String), changed: ["Review"] });
+  });
+
+  it("scans backend folders for runtime imports", async () => {
+    const scanDir = await mkdtemp(join(tmpdir(), "project-graph-folder-scan-test-"));
+    tempDirs.push(scanDir);
+    const server = await startServer({ folderScanRoots: scanDir });
+    await mkdir(join(scanDir, "src", "nested"), { recursive: true });
+    await writeFile(join(scanDir, "README.md"), "# Project\n");
+    await writeFile(join(scanDir, "src", "index.ts"), "export {};\n");
+
+    const scan = await requestJson(server, "/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ path: scanDir }),
+    });
+    const missing = await requestJson(server, "/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ path: join(scanDir, "missing") }),
+    });
+    const outside = await requestJson(server, "/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ path: tmpdir() }),
+    });
+
+    expect(scan.response.status).toBe(200);
+    expect(scan.body).toMatchObject({
+      ok: true,
+      root: {
+        name: expect.stringContaining("project-graph-folder-scan-test-"),
+        path: scanDir,
+        is_file: false,
+      },
+    });
+    expect(scan.body.root.children.map((entry) => entry.name)).toEqual(["src", "README.md"]);
+    expect(scan.body.root.children[0]).toMatchObject({
+      name: "src",
+      is_file: false,
+      children: [{ name: "nested" }, { name: "index.ts", is_file: true }],
+    });
+    expect(missing.response.status).toBe(404);
+    expect(missing.body).toMatchObject({ ok: false, code: "folder_scan_path_not_found" });
+    expect(outside.response.status).toBe(403);
+    expect(outside.body).toMatchObject({ ok: false, code: "folder_scan_path_forbidden" });
+  });
+
+  it("keeps backend folder scanning disabled until roots are explicitly configured", async () => {
+    const server = await startServer();
+    const scan = await requestJson(server, "/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ path: tmpdir() }),
+    });
+
+    expect(scan.response.status).toBe(403);
+    expect(scan.body).toMatchObject({ ok: false, code: "folder_scan_disabled" });
   });
 
   it("publishes project change events over SSE", async () => {
@@ -421,6 +478,7 @@ async function startServer(options = {}) {
       ...process.env,
       PG_WEB_AUTH_PASSWORD: options.authPassword ?? "",
       PG_WEB_DATA_DIR: dataDir,
+      PG_WEB_FOLDER_SCAN_ROOTS: options.folderScanRoots ?? "",
       PG_WEB_HOST: "127.0.0.1",
       PG_WEB_PORT: String(port),
       PG_WEB_STATIC_DIR: "",

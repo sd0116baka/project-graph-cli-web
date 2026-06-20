@@ -33,6 +33,10 @@ function fakeProject(uri: URI, content = new Uint8Array([1, 2, 3])): Project {
   return {
     uri,
     getFileContent: vi.fn().mockResolvedValue(content),
+    generateFromFolder: {
+      generateFromFolderEntry: vi.fn().mockResolvedValue(undefined),
+      generateTreeFromFolderEntry: vi.fn().mockResolvedValue(undefined),
+    },
   } as unknown as Project;
 }
 
@@ -90,8 +94,9 @@ describe("ProjectRuntimeActions", () => {
       backup: false,
       saveAs: false,
       importFilesToStage: true,
-      importFolderToStage: false,
+      importFolderToStage: true,
       exportBlob: true,
+      scanFolderForStage: true,
     });
     const backup = ProjectRuntimeActions.createBackup(project);
     expect(backup).toBeInstanceOf(Promise);
@@ -111,12 +116,6 @@ describe("ProjectRuntimeActions", () => {
         runtime: "browser",
       },
     });
-    await expect(ProjectRuntimeActions.importFolderToStage(project, "tree")).rejects.toMatchObject({
-      detail: {
-        action: "importFolderToStage",
-        runtime: "browser",
-      },
-    });
   });
 
   it("uses the Tauri adapter for local projects in Tauri", async () => {
@@ -133,7 +132,7 @@ describe("ProjectRuntimeActions", () => {
       importFilesToStage: true,
       importFolderToStage: true,
       exportBlob: true,
-      scanFolderForStage: false,
+      scanFolderForStage: true,
     });
     const backup = ProjectRuntimeActions.createBackup(project);
     expect(backup).toBeInstanceOf(Promise);
@@ -177,8 +176,74 @@ describe("ProjectRuntimeActions", () => {
     expect(ProjectRuntimeActions.resolveForFileExchange(project).kind).toBe("browser");
     await expect(ProjectRuntimeActions.resolveForFileExchange(project).capabilities(project)).resolves.toMatchObject({
       importFilesToStage: true,
-      importFolderToStage: false,
+      importFolderToStage: true,
       exportBlob: true,
+      scanFolderForStage: true,
+    });
+  });
+
+  it("routes server folder imports through the backend folder scanner", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    const folderStructure: ServerProjectManager.FolderEntry = {
+      name: "repo",
+      path: "C:/repo",
+      is_file: false,
+      children: [{ name: "README.md", path: "C:/repo/README.md", is_file: true }],
+    };
+    vi.spyOn(ServerProjectManager, "getServerInfo").mockResolvedValue(serverInfo({ backup: true, folderScan: true }));
+    const scanServerFolder = vi.spyOn(ServerProjectManager, "scanServerFolder").mockResolvedValue(folderStructure);
+    vi.stubGlobal(
+      "prompt",
+      vi.fn(() => "C:/repo"),
+    );
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    await ProjectRuntimeActions.importFolderToStage(project, "tree");
+
+    expect(scanServerFolder).toHaveBeenCalledWith("C:/repo");
+    expect(project.generateFromFolder.generateTreeFromFolderEntry).toHaveBeenCalledWith(folderStructure);
+    expect(project.generateFromFolder.generateFromFolderEntry).not.toHaveBeenCalled();
+  });
+
+  it("builds stable folder entries from browser directory files", () => {
+    const readme = browserDirectoryFile("README.md", "repo/README.md");
+    const index = browserDirectoryFile("index.ts", "repo/src/index.ts");
+    const nested = browserDirectoryFile("note.md", "repo/src/nested/note.md");
+
+    const root = ProjectRuntimeActions.folderEntryFromBrowserFiles([readme, nested, index]);
+
+    expect(root).toEqual({
+      name: "repo",
+      path: "repo",
+      is_file: false,
+      children: [
+        {
+          name: "src",
+          path: "repo/src",
+          is_file: false,
+          children: [
+            {
+              name: "nested",
+              path: "repo/src/nested",
+              is_file: false,
+              children: [{ name: "note.md", path: "repo/src/nested/note.md", is_file: true }],
+            },
+            { name: "index.ts", path: "repo/src/index.ts", is_file: true },
+          ],
+        },
+        { name: "README.md", path: "repo/README.md", is_file: true },
+      ],
+    });
+  });
+
+  it("builds a browser-files root when files do not have directory paths", () => {
+    const root = ProjectRuntimeActions.folderEntryFromBrowserFiles([new File(["a"], "a.txt")]);
+
+    expect(root).toEqual({
+      name: "browser-files",
+      path: "browser-files",
+      is_file: false,
+      children: [{ name: "a.txt", path: "browser-files/a.txt", is_file: true }],
     });
   });
 
@@ -229,7 +294,7 @@ describe("ProjectRuntimeActions", () => {
     const project = fakeProject(ServerProjectManager.projectUri("project-1"));
 
     await expect(ProjectRuntimeActions.importFolderToStage(project, "section")).rejects.toMatchObject({
-      code: "unsupported_project_action",
+      code: "server_capability_unavailable",
       detail: {
         action: "importFolderToStage",
         runtime: "server",
@@ -243,3 +308,9 @@ describe("ProjectRuntimeActions", () => {
     });
   });
 });
+
+function browserDirectoryFile(name: string, relativePath: string): File {
+  const file = new File(["content"], name);
+  Object.defineProperty(file, "webkitRelativePath", { value: relativePath });
+  return file;
+}

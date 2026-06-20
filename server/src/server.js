@@ -28,6 +28,8 @@ const port = Number(process.env.PORT ?? process.env.PG_WEB_PORT ?? 37820);
 const host = process.env.HOST ?? process.env.PG_WEB_HOST ?? "0.0.0.0";
 const authUser = process.env.PG_WEB_AUTH_USER ?? "pg";
 const authPassword = process.env.PG_WEB_AUTH_PASSWORD ?? "";
+const folderScanRoots = normalizeFolderScanRoots(process.env.PG_WEB_FOLDER_SCAN_ROOTS ?? "");
+const allowUnsafeFolderScan = process.env.PG_WEB_ALLOW_UNSAFE_FOLDER_SCAN === "1";
 const projectMutationQueues = new Map();
 const eventClients = new Set();
 let eventSeq = 0;
@@ -122,6 +124,8 @@ async function handleApi(req, res, requestUrl) {
         export: true,
         validate: true,
         import: true,
+        folderScan: isFolderScanEnabled(),
+        scanFolderForStage: isFolderScanEnabled(),
         history: true,
         backup: true,
         restore: true,
@@ -134,6 +138,13 @@ async function handleApi(req, res, requestUrl) {
 
   if (req.method === "GET" && requestUrl.pathname === "/api/events") {
     sendEventStream(req, res);
+    return;
+  }
+
+  if (segments.length === 3 && segments[1] === "folders" && segments[2] === "scan" && req.method === "POST") {
+    const body = await readJson(req);
+    const root = await scanFolderStructure(body);
+    sendJson(res, 200, { ok: true, root });
     return;
   }
 
@@ -618,6 +629,63 @@ async function restoreProjectRevision(id, revision) {
   return writeProjectBlob(id, content);
 }
 
+async function scanFolderStructure(body) {
+  if (!isFolderScanEnabled()) {
+    throw createHttpError(
+      "Folder scanning is disabled",
+      403,
+      "folder_scan_disabled",
+      "Set PG_WEB_FOLDER_SCAN_ROOTS to one or more allowed root directories before enabling backend path scans.",
+    );
+  }
+  const rootPath = normalizeFolderScanPath(body?.path);
+  const options = {
+    maxDepth: clampNumber(Number(body?.maxDepth ?? 32), 1, 64),
+    maxEntries: clampNumber(Number(body?.maxEntries ?? 5000), 1, 20000),
+  };
+  const state = { count: 0 };
+  const rootStat = await statForFolderScan(rootPath);
+  if (!rootStat.isDirectory()) {
+    throw createHttpError("Folder path must point to a directory", 400, "folder_scan_not_directory", {
+      path: rootPath,
+    });
+  }
+  return scanFolderEntry(rootPath, options, state, 0);
+}
+
+async function scanFolderEntry(entryPath, options, state, depth) {
+  state.count += 1;
+  if (state.count > options.maxEntries) {
+    throw createHttpError("Folder scan entry limit exceeded", 413, "folder_scan_limit_exceeded", {
+      maxEntries: options.maxEntries,
+    });
+  }
+
+  const stat = await statForFolderScan(entryPath);
+  const name = path.basename(entryPath) || entryPath;
+  if (stat.isFile()) {
+    return { name, path: entryPath, is_file: true };
+  }
+  if (!stat.isDirectory()) {
+    throw createHttpError("Folder scan supports only files and directories", 400, "folder_scan_unsupported_entry", {
+      path: entryPath,
+    });
+  }
+
+  const entry = { name, path: entryPath, is_file: false, children: [] };
+  if (depth >= options.maxDepth) {
+    return entry;
+  }
+
+  const children = await readDirForFolderScan(entryPath);
+  children.sort((a, b) => Number(a.isFile()) - Number(b.isFile()) || a.name.localeCompare(b.name));
+  for (const child of children) {
+    if (!child.isFile() && !child.isDirectory()) continue;
+    entry.children.push(await scanFolderEntry(path.join(entryPath, child.name), options, state, depth + 1));
+  }
+  return entry;
+}
+
 async function runProjectMutation(id, task) {
   const previous = projectMutationQueues.get(id) ?? Promise.resolve();
   let release;
@@ -819,6 +887,59 @@ function normalizeProjectId(id) {
     throw new Error("Invalid project id");
   }
   return id;
+}
+
+function normalizeFolderScanPath(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw createHttpError("Folder scan path is required", 400, "folder_scan_path_required");
+  }
+  const resolvedPath = path.resolve(value);
+  if (!isFolderScanPathAllowed(resolvedPath)) {
+    throw createHttpError("Folder scan path is outside allowed roots", 403, "folder_scan_path_forbidden");
+  }
+  return resolvedPath;
+}
+
+function normalizeFolderScanRoots(value) {
+  return String(value)
+    .split(path.delimiter)
+    .map((root) => root.trim())
+    .filter(Boolean)
+    .map((root) => path.resolve(root));
+}
+
+function isFolderScanEnabled() {
+  return allowUnsafeFolderScan || folderScanRoots.length > 0;
+}
+
+function isFolderScanPathAllowed(targetPath) {
+  if (allowUnsafeFolderScan) return true;
+  return folderScanRoots.some((root) => isPathInside(root, targetPath));
+}
+
+async function statForFolderScan(entryPath) {
+  try {
+    return await fs.stat(entryPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw createHttpError("Folder scan path not found", 404, "folder_scan_path_not_found", { path: entryPath });
+    }
+    throw createHttpError("Cannot scan folder path", 500, "folder_scan_failed", {
+      path: entryPath,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function readDirForFolderScan(entryPath) {
+  try {
+    return await fs.readdir(entryPath, { withFileTypes: true });
+  } catch (error) {
+    throw createHttpError("Cannot scan folder path", 500, "folder_scan_failed", {
+      path: entryPath,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function normalizeRevisionName(revision) {

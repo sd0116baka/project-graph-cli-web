@@ -46,6 +46,47 @@ export async function pickBrowserFiles({ accept = "", multiple = false }: Browse
   });
 }
 
+export async function pickBrowserDirectory(): Promise<File[]> {
+  if (typeof document === "undefined") {
+    throw new Error("当前运行时不支持浏览器目录选择器");
+  }
+
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    (input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
+    input.style.display = "none";
+
+    let settled = false;
+    const settle = (files: File[]) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("focus", onFocus);
+      input.remove();
+      resolve(files);
+    };
+    const onFocus = () => {
+      window.setTimeout(() => {
+        if (!settled && (!input.files || input.files.length === 0)) {
+          settle([]);
+        }
+      }, 300);
+    };
+
+    input.addEventListener("change", () => {
+      settle(Array.from(input.files ?? []));
+    });
+    input.addEventListener("cancel", () => {
+      settle([]);
+    });
+
+    document.body.append(input);
+    window.setTimeout(() => window.addEventListener("focus", onFocus, { once: true }), 0);
+    input.click();
+  });
+}
+
 export function extensionAccept(extensions: string[]): string {
   return extensions.map((extension) => `.${extension}`).join(",");
 }

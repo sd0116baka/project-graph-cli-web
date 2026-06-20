@@ -1,6 +1,5 @@
 import { Color, Vector } from "@graphif/data-structures";
 import { Project, service } from "@/core/Project";
-import { invoke } from "@tauri-apps/api/core";
 import { Section } from "@/core/stage/stageObject/entity/Section";
 import { TextNode } from "@/core/stage/stageObject/entity/TextNode";
 import { DetailsManager } from "@/core/stage/stageObject/tools/entityDetailsManager";
@@ -22,7 +21,11 @@ export class GenerateFromFolder {
   constructor(private readonly project: Project) {}
 
   async generateFromFolder(folderPath: string): Promise<void> {
-    const folderStructure = await readFolderStructure(folderPath);
+    const folderStructure = await readTauriFolderStructure(folderPath);
+    await this.generateFromFolderEntry(folderStructure);
+  }
+
+  async generateFromFolderEntry(folderStructure: FolderEntry): Promise<void> {
     // 当前的放置点位
     const currentLocation = this.project.camera.location.clone();
     const dfs = (fEntry: FolderEntry, currentSection: Section | null = null) => {
@@ -65,7 +68,11 @@ export class GenerateFromFolder {
   }
 
   async generateTreeFromFolder(folderPath: string): Promise<void> {
-    const folderStructure = await readFolderStructure(folderPath);
+    const folderStructure = await readTauriFolderStructure(folderPath);
+    await this.generateTreeFromFolderEntry(folderStructure);
+  }
+
+  async generateTreeFromFolderEntry(folderStructure: FolderEntry): Promise<void> {
     // 当前的放置点位
     const currentLocation = this.project.camera.location.clone();
 
@@ -150,8 +157,8 @@ export type FolderEntry = {
   children?: FolderEntry[];
 };
 
-function readFolderStructure(path: string): Promise<FolderEntry> {
-  // 不可能是isWeb的情况了
+export async function readTauriFolderStructure(path: string): Promise<FolderEntry> {
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke("read_folder_structure", { path });
 }
 

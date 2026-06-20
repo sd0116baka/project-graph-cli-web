@@ -75,6 +75,18 @@ export namespace ServerProjectManager {
     [key: string]: unknown;
   };
 
+  export type FolderEntry = {
+    name: string;
+    path: string;
+    is_file: boolean;
+    children?: FolderEntry[];
+  };
+
+  export type FolderScanOptions = {
+    maxDepth?: number;
+    maxEntries?: number;
+  };
+
   export type BackendStartOptions = {
     port?: number;
     dataDir?: string;
@@ -434,6 +446,15 @@ export namespace ServerProjectManager {
       body,
     });
     return data.backup;
+  }
+
+  export async function scanServerFolder(path: string, options: FolderScanOptions = {}): Promise<FolderEntry> {
+    const data = await apiJson<{ root: FolderEntry }>("/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, ...options }),
+    });
+    return data.root;
   }
 
   export async function projectBlobExists(id: string): Promise<boolean> {

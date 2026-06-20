@@ -15,12 +15,7 @@ export namespace ProjectRuntimeActions {
     | { kind: "server-path"; path: string }
     | { kind: "browser-files"; files: File[] };
 
-  export type FolderEntry = {
-    name: string;
-    path: string;
-    kind: "file" | "directory";
-    children?: FolderEntry[];
-  };
+  export type FolderEntry = ServerProjectManager.FolderEntry;
 
   export type ProjectBackupResult = {
     runtime: RuntimeKind;
@@ -132,7 +127,7 @@ export namespace ProjectRuntimeActions {
   }
 
   export async function importFolderToStage(project: Project, mode: FolderImportMode): Promise<void> {
-    return resolve(project).importFolderToStage({ project }, mode);
+    return resolveForFileExchange(project).importFolderToStage({ project }, mode);
   }
 
   export async function exportBlob(project: Project, blob: Blob, suggestedName: string): Promise<ProjectExportResult> {
@@ -185,9 +180,18 @@ export namespace ProjectRuntimeActions {
       "importFilesToStage",
       "服务器项目导入文件需要后端导入 API 或浏览器文件上传通道。",
     ),
-    importFolderToStage: unsupported("server", "importFolderToStage", "服务器项目从文件夹生成需要后端扫描 API。"),
+    async importFolderToStage({ project }, mode) {
+      await ensureServerCapability("importFolderToStage");
+      const path = promptServerFolderPath();
+      if (!path) return;
+      const folderStructure = await scanServerFolderSource({ kind: "server-path", path });
+      await applyFolderEntryToStage(project, mode, folderStructure);
+    },
     exportBlob: unsupported("server", "exportBlob", "服务器项目导出还没有接入运行时适配层。"),
-    scanFolderForStage: unsupported("server", "scanFolderForStage", "服务器项目文件夹扫描需要后端 API。"),
+    async scanFolderForStage(_context, source) {
+      await ensureServerCapability("scanFolderForStage");
+      return scanServerFolderSource(source);
+    },
   };
 
   const tauriProjectActions: ProjectRuntimeActionSet = {
@@ -260,11 +264,8 @@ export namespace ProjectRuntimeActions {
         filters: [],
       });
       if (!path || typeof path !== "string") return;
-      if (mode === "section") {
-        await project.generateFromFolder.generateFromFolder(path);
-      } else {
-        await project.generateFromFolder.generateTreeFromFolder(path);
-      }
+      const folderStructure = await tauriProjectActions.scanFolderForStage({ project }, { kind: "tauri-path", path });
+      await applyFolderEntryToStage(project, mode, folderStructure);
     },
     async exportBlob(_context, blob, suggestedName) {
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -278,7 +279,14 @@ export namespace ProjectRuntimeActions {
       await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
       return { runtime: "tauri", status: "exported" };
     },
-    scanFolderForStage: unsupported("tauri", "scanFolderForStage", "本地项目文件夹扫描还没有接入运行时适配层。"),
+    async scanFolderForStage(_context, source) {
+      if (source.kind !== "tauri-path") {
+        throw unsupportedError("tauri", "scanFolderForStage", "桌面端文件夹扫描需要本机文件夹路径。");
+      }
+      const { readTauriFolderStructure } =
+        await import("@/core/service/dataGenerateService/generateFromFolderEngine/GenerateFromFolderEngine");
+      return readTauriFolderStructure(source.path);
+    },
   };
 
   const browserProjectActions: ProjectRuntimeActionSet = {
@@ -309,13 +317,27 @@ export namespace ProjectRuntimeActions {
       });
       await StageFileImportService.importBrowserFiles(project, files);
     },
-    importFolderToStage: unsupported("browser", "importFolderToStage", "浏览器从文件夹生成需要目录选择或上传通道。"),
+    async importFolderToStage({ project }, mode) {
+      const { pickBrowserDirectory } = await import("@/utils/browserFileDialog");
+      const files = await pickBrowserDirectory();
+      if (files.length === 0) return;
+      const folderStructure = await browserProjectActions.scanFolderForStage(
+        { project },
+        { kind: "browser-files", files },
+      );
+      await applyFolderEntryToStage(project, mode, folderStructure);
+    },
     async exportBlob(_context, blob, suggestedName) {
       const { downloadBrowserBlob } = await import("@/utils/browserFileDialog");
       downloadBrowserBlob(blob, suggestedName);
       return { runtime: "browser", status: "exported" };
     },
-    scanFolderForStage: unsupported("browser", "scanFolderForStage", "浏览器文件夹扫描还没有接入运行时适配层。"),
+    async scanFolderForStage(_context, source) {
+      if (source.kind !== "browser-files") {
+        throw unsupportedError("browser", "scanFolderForStage", "浏览器文件夹扫描需要目录上传文件列表。");
+      }
+      return folderEntryFromBrowserFiles(source.files);
+    },
   };
 
   const serverBaseCapabilities: ProjectRuntimeCapabilities = {
@@ -335,7 +357,7 @@ export namespace ProjectRuntimeActions {
     importFilesToStage: true,
     importFolderToStage: true,
     exportBlob: true,
-    scanFolderForStage: false,
+    scanFolderForStage: true,
   };
 
   const browserCapabilities: ProjectRuntimeCapabilities = {
@@ -343,9 +365,9 @@ export namespace ProjectRuntimeActions {
     saveAs: false,
     revealProjectLocation: false,
     importFilesToStage: true,
-    importFolderToStage: false,
+    importFolderToStage: true,
     exportBlob: true,
-    scanFolderForStage: false,
+    scanFolderForStage: true,
   };
 
   async function ensureServerCapability(capability: keyof ProjectRuntimeCapabilities): Promise<void> {
@@ -386,9 +408,12 @@ export namespace ProjectRuntimeActions {
 
   async function readServerCapabilities(): Promise<ProjectRuntimeCapabilities> {
     const info = await ServerProjectManager.getServerInfo();
+    const folderScan = info.capabilities?.scanFolderForStage ?? info.capabilities?.folderScan ?? false;
     return {
       ...serverBaseCapabilities,
       backup: info.capabilities?.backup ?? true,
+      importFolderToStage: folderScan,
+      scanFolderForStage: folderScan,
     };
   }
 
@@ -409,5 +434,84 @@ export namespace ProjectRuntimeActions {
     if (ext === "svg") return [{ name: "Scalable Vector Graphics", extensions: ["svg"] }];
     if (ext === "png") return [{ name: "Portable Network Graphics", extensions: ["png"] }];
     return [{ name: "文件", extensions: ext ? [ext] : [] }];
+  }
+
+  async function applyFolderEntryToStage(
+    project: Project,
+    mode: FolderImportMode,
+    folderStructure: FolderEntry,
+  ): Promise<void> {
+    if (mode === "section") {
+      await project.generateFromFolder.generateFromFolderEntry(folderStructure);
+    } else {
+      await project.generateFromFolder.generateTreeFromFolderEntry(folderStructure);
+    }
+  }
+
+  async function scanServerFolderSource(source: FolderSource): Promise<FolderEntry> {
+    if (source.kind !== "server-path") {
+      throw unsupportedError("server", "scanFolderForStage", "服务器项目只能扫描后端机器上的文件夹路径。");
+    }
+    return ServerProjectManager.scanServerFolder(source.path);
+  }
+
+  function promptServerFolderPath(): string | undefined {
+    const path = globalThis.prompt?.("输入后端机器上的文件夹路径")?.trim();
+    return path || undefined;
+  }
+
+  export function folderEntryFromBrowserFiles(files: File[]): FolderEntry {
+    const paths = files.map((file) => browserRelativePath(file)).filter(Boolean);
+    const firstSegments = new Set(paths.map((path) => path.split(/[\\/]/).filter(Boolean)[0]).filter(Boolean));
+    const hasSingleRoot =
+      firstSegments.size === 1 && paths.every((path) => path.split(/[\\/]/).filter(Boolean).length > 1);
+    const rootName = hasSingleRoot ? [...firstSegments][0]! : "browser-files";
+    const root: FolderEntry = { name: rootName, path: rootName, is_file: false, children: [] };
+
+    for (const file of files) {
+      const parts = browserRelativePath(file).split(/[\\/]/).filter(Boolean);
+      appendBrowserFile(root, hasSingleRoot ? parts.slice(1) : parts);
+    }
+
+    sortFolderEntry(root);
+    return root;
+  }
+
+  function appendBrowserFile(root: FolderEntry, parts: string[]): void {
+    if (parts.length === 0) return;
+    let current = root;
+    for (const part of parts.slice(0, -1)) {
+      current.children ??= [];
+      let child = current.children.find((entry) => !entry.is_file && entry.name === part);
+      if (!child) {
+        child = {
+          name: part,
+          path: `${current.path}/${part}`,
+          is_file: false,
+          children: [],
+        };
+        current.children.push(child);
+      }
+      current = child;
+    }
+
+    current.children ??= [];
+    const fileName = parts[parts.length - 1]!;
+    current.children.push({
+      name: fileName,
+      path: `${current.path}/${fileName}`,
+      is_file: true,
+    });
+  }
+
+  function sortFolderEntry(entry: FolderEntry): void {
+    entry.children?.sort((a, b) => Number(a.is_file) - Number(b.is_file) || a.name.localeCompare(b.name));
+    for (const child of entry.children ?? []) {
+      sortFolderEntry(child);
+    }
+  }
+
+  function browserRelativePath(file: File): string {
+    return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
   }
 }
