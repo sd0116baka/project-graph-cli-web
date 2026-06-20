@@ -87,6 +87,18 @@ export namespace ServerProjectManager {
     maxEntries?: number;
   };
 
+  export type ProjectReference = {
+    name: string;
+    projectId: string;
+    createdAt?: string;
+    updatedAt?: string;
+    created?: boolean;
+    project?: ServerProject & {
+      etag?: string;
+      revisionToken?: string;
+    };
+  };
+
   export type BackendStartOptions = {
     port?: number;
     dataDir?: string;
@@ -455,6 +467,36 @@ export namespace ServerProjectManager {
       body: JSON.stringify({ path, ...options }),
     });
     return data.root;
+  }
+
+  export async function listProjectReferences(id: string): Promise<ProjectReference[]> {
+    const data = await apiJson<{ references: ProjectReference[] }>(
+      `/api/projects/${encodeURIComponent(id)}/references`,
+    );
+    return data.references;
+  }
+
+  export async function resolveProjectReference(id: string, name: string): Promise<ProjectReference | undefined> {
+    try {
+      const data = await apiJson<{ reference: ProjectReference }>(
+        `/api/projects/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`,
+      );
+      return data.reference;
+    } catch (error) {
+      if (error instanceof ServerProjectError && error.code === "project_reference_not_found") {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  export async function ensureProjectReference(id: string, name: string): Promise<ProjectReference> {
+    const data = await apiJson<{ reference: ProjectReference }>(`/api/projects/${encodeURIComponent(id)}/references`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    return data.reference;
   }
 
   export async function projectBlobExists(id: string): Promise<boolean> {

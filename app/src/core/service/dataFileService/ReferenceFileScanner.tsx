@@ -19,12 +19,18 @@
  *       └── 引用文件3.prg
  */
 
-import { mkdir, readDir, exists } from "@tauri-apps/plugin-fs";
-import { join } from "@tauri-apps/api/path";
+import type { Project } from "@/core/Project";
+import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import { PathString } from "@/utils/pathString";
 import { URI } from "vscode-uri";
 
 export namespace ReferenceFileScanner {
+  export type ProjectReferenceUri = {
+    uri: URI;
+    name: string;
+    created: boolean;
+  };
+
   /**
    * 文件缓存：项目路径 -> 该项目引用文件夹中的文件名集合
    * 用于加速后续查找，避免重复扫描文件系统
@@ -57,7 +63,8 @@ export namespace ReferenceFileScanner {
    */
   export async function ensureReferenceFolderExists(projectPath: string): Promise<string> {
     const folderPath = getReferenceFolderPath(projectPath);
-    if (!(await exists(folderPath))) {
+    if (!(await pathExists(folderPath))) {
+      const { mkdir } = await import("@tauri-apps/plugin-fs");
       await mkdir(folderPath, { recursive: true });
     }
     return folderPath;
@@ -74,7 +81,7 @@ export namespace ReferenceFileScanner {
     const folderPath = getReferenceFolderPath(projectPath);
     const fileNames = new Set<string>();
 
-    if (await exists(folderPath)) {
+    if (await pathExists(folderPath)) {
       await scanDirectoryRecursive(folderPath, fileNames);
     }
 
@@ -87,6 +94,8 @@ export namespace ReferenceFileScanner {
    */
   async function scanDirectoryRecursive(dirPath: string, fileNames: Set<string>): Promise<void> {
     try {
+      const { readDir } = await import("@tauri-apps/plugin-fs");
+      const { join } = await import("@tauri-apps/api/path");
       const entries = await readDir(dirPath);
       for (const entry of entries) {
         const entryPath = await join(dirPath, entry.name);
@@ -107,7 +116,7 @@ export namespace ReferenceFileScanner {
    */
   export async function findFileInReferenceFolder(projectPath: string, fileName: string): Promise<string | null> {
     const folderPath = getReferenceFolderPath(projectPath);
-    if (!(await exists(folderPath))) return null;
+    if (!(await pathExists(folderPath))) return null;
     return findFileRecursive(folderPath, `${fileName}.prg`);
   }
 
@@ -117,6 +126,8 @@ export namespace ReferenceFileScanner {
    */
   async function findFileRecursive(dirPath: string, targetFileName: string): Promise<string | null> {
     try {
+      const { readDir } = await import("@tauri-apps/plugin-fs");
+      const { join } = await import("@tauri-apps/api/path");
       const entries = await readDir(dirPath);
       for (const entry of entries) {
         const entryPath = await join(dirPath, entry.name);
@@ -156,5 +167,46 @@ export namespace ReferenceFileScanner {
    */
   export function getNewFileUri(projectPath: string, fileName: string): URI {
     return URI.file(getNewFilePath(projectPath, fileName));
+  }
+
+  export async function findReferenceUri(project: Project, fileName: string): Promise<URI | undefined> {
+    if (project.uri.scheme === "server") {
+      const sourceId = ServerProjectManager.projectIdFromUri(project.uri);
+      const reference = await ServerProjectManager.resolveProjectReference(sourceId, fileName);
+      if (reference) return ServerProjectManager.projectUri(reference.projectId);
+      return undefined;
+    }
+
+    const foundPath = await findFileInReferenceFolder(project.uri.fsPath, fileName);
+    return foundPath ? URI.file(foundPath) : undefined;
+  }
+
+  export async function ensureReferenceUri(project: Project, fileName: string): Promise<ProjectReferenceUri> {
+    if (project.uri.scheme === "server") {
+      const sourceId = ServerProjectManager.projectIdFromUri(project.uri);
+      const reference = await ServerProjectManager.ensureProjectReference(sourceId, fileName);
+      return {
+        uri: ServerProjectManager.projectUri(reference.projectId),
+        name: reference.name,
+        created: Boolean(reference.created),
+      };
+    }
+
+    const existing = await findReferenceUri(project, fileName);
+    if (existing) {
+      return { uri: existing, name: fileName, created: false };
+    }
+
+    await ensureReferenceFolderExists(project.uri.fsPath);
+    return {
+      uri: getNewFileUri(project.uri.fsPath, fileName),
+      name: fileName,
+      created: true,
+    };
+  }
+
+  async function pathExists(path: string): Promise<boolean> {
+    const { exists } = await import("@tauri-apps/plugin-fs");
+    return exists(path);
   }
 }

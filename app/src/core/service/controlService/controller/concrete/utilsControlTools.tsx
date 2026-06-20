@@ -3,6 +3,7 @@ import { Project } from "@/core/Project";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
 import { ReferenceFileScanner } from "@/core/service/dataFileService/ReferenceFileScanner";
 import { CrossFileContentQuery } from "@/core/service/dataGenerateService/crossFileContentQuery";
+import { onOpenFile } from "@/core/service/GlobalMenu";
 import { LogicNodeNameToRenderNameMap } from "@/core/service/dataGenerateService/autoComputeEngine/logicNodeNameEnum";
 import { TextNodeSmartTools } from "@/core/service/dataManageService/textNodeSmartTools";
 import { SubWindow } from "@/core/service/SubWindow";
@@ -17,7 +18,6 @@ import { PathString } from "@/utils/pathString";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
 import { toast } from "sonner";
-import { URI } from "vscode-uri";
 import Fuse from "fuse.js";
 import _ from "lodash";
 import katex from "katex";
@@ -49,14 +49,13 @@ export async function autoChangeTextNodeToReferenceBlock(project: Project, textN
     return;
   }
 
-  // 优先在当前项目的引用文件夹中查找
-  const foundPath = await ReferenceFileScanner.findFileInReferenceFolder(project.uri.fsPath, parserResult.fileName);
+  const foundUri = await ReferenceFileScanner.findReferenceUri(project, parserResult.fileName);
 
-  if (foundPath) {
+  if (foundUri) {
     // 文件已存在：加入最近文件列表，校验 Section，然后创建引用块
-    await RecentFileManager.addRecentFileByUri(URI.file(foundPath));
+    await RecentFileManager.addRecentFileByUri(foundUri);
     if (parserResult.sectionName) {
-      const sections = await CrossFileContentQuery.getSectionsByFileName(parserResult.fileName);
+      const sections = await CrossFileContentQuery.getSectionsByFileName(parserResult.fileName, project);
       if (!sections.includes(parserResult.sectionName)) {
         toast.error(`文件【${parserResult.fileName}】中没有section【${parserResult.sectionName}】，不能创建引用`);
         return;
@@ -67,44 +66,48 @@ export async function autoChangeTextNodeToReferenceBlock(project: Project, textN
   }
 
   // 文件不存在：尝试从最近文件列表中查找（兼容旧逻辑）
-  const recentFiles = await RecentFileManager.getRecentFiles();
-  const recentFile = recentFiles.find(
-    (item) => PathString.getFileNameFromPath(item.uri.fsPath) === parserResult.fileName,
-  );
-  if (recentFile) {
-    if (parserResult.sectionName) {
-      const sections = await CrossFileContentQuery.getSectionsByFileName(parserResult.fileName);
-      if (!sections.includes(parserResult.sectionName)) {
-        toast.error(`文件【${parserResult.fileName}】中没有section【${parserResult.sectionName}】，不能创建引用`);
-        return;
+  if (project.uri.scheme !== "server") {
+    const recentFiles = await RecentFileManager.getRecentFiles();
+    const recentFile = recentFiles.find(
+      (item) => PathString.getFileNameFromPath(item.uri.fsPath) === parserResult.fileName,
+    );
+    if (recentFile) {
+      if (parserResult.sectionName) {
+        const sections = await CrossFileContentQuery.getSectionsByFileName(parserResult.fileName, project);
+        if (!sections.includes(parserResult.sectionName)) {
+          toast.error(`文件【${parserResult.fileName}】中没有section【${parserResult.sectionName}】，不能创建引用`);
+          return;
+        }
       }
+      await TextNodeSmartTools.changeTextNodeToReferenceBlock(project);
+      return;
     }
-    await TextNodeSmartTools.changeTextNodeToReferenceBlock(project);
-    return;
   }
 
-  // 文件完全不存在：自动在引用文件夹中创建新文件
-  await ReferenceFileScanner.ensureReferenceFolderExists(project.uri.fsPath);
-  const newUri = ReferenceFileScanner.getNewFileUri(project.uri.fsPath, parserResult.fileName);
+  const reference = await ReferenceFileScanner.ensureReferenceUri(project, parserResult.fileName);
 
-  const newProject = Project.newDraft();
-  newProject.uri = newUri;
-  loadAllServicesBeforeInit(newProject);
-  await newProject.init();
-  loadAllServicesAfterInit(newProject);
+  if (reference.uri.scheme === "server") {
+    await onOpenFile(reference.uri, "创建服务器引用文件");
+  } else {
+    const newProject = Project.newDraft();
+    newProject.uri = reference.uri;
+    loadAllServicesBeforeInit(newProject);
+    await newProject.init();
+    loadAllServicesAfterInit(newProject);
 
-  // 新文件中创建一个以文件名命名的初始文本节点
-  const newTextNode = new TextNode(newProject, { text: parserResult.fileName });
-  newProject.stageManager.add(newTextNode);
-  newTextNode.isSelected = true;
+    // 新文件中创建一个以文件名命名的初始文本节点
+    const newTextNode = new TextNode(newProject, { text: parserResult.fileName });
+    newProject.stageManager.add(newTextNode);
+    newTextNode.isSelected = true;
 
-  await newProject.save();
-  await RecentFileManager.addRecentFileByUri(newUri);
-  await ReferenceFileScanner.addFileToCache(project.uri.fsPath, parserResult.fileName);
+    await newProject.save();
+    await RecentFileManager.addRecentFileByUri(reference.uri);
+    await ReferenceFileScanner.addFileToCache(project.uri.fsPath, parserResult.fileName);
 
-  // 将新项目加入项目列表并切换
-  store.set(tabsAtom, [...store.get(tabsAtom), newProject]);
-  store.set(activeTabAtom, newProject);
+    // 将新项目加入项目列表并切换
+    store.set(tabsAtom, [...store.get(tabsAtom), newProject]);
+    store.set(activeTabAtom, newProject);
+  }
 
   // 在原项目中创建引用块
   await TextNodeSmartTools.changeTextNodeToReferenceBlock(project);
@@ -368,7 +371,7 @@ export class AutoCompleteManager {
     setWindowId: (id: string) => void,
   ) {
     const [fileName, sectionName] = searchText.split("#", 2);
-    const sections = await CrossFileContentQuery.getSectionsByFileName(fileName);
+    const sections = await CrossFileContentQuery.getSectionsByFileName(fileName, this.project);
     const sectionObjects = sections.map((s) => ({ name: s }));
 
     let results: { item: { name: string } }[];

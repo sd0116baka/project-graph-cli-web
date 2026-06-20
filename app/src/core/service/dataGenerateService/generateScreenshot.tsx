@@ -98,14 +98,18 @@ export namespace GenerateScreenshot {
    * 根据文件名查找对应的 URI
    *
    * 查找优先级：
-   * 1. 若提供了 currentProjectPath，优先在当前项目的引用文件夹中查找
+   * 1. 若提供了当前项目，优先在当前项目的引用索引中查找
    * 2. 兜底：从最近打开文件列表中查找
    *
    * @returns 找到时返回 URI，否则返回 undefined
    */
-  async function resolveFileUri(fileName: string, currentProjectPath?: string): Promise<URI | undefined> {
-    if (currentProjectPath) {
-      const foundPath = await ReferenceFileScanner.findFileInReferenceFolder(currentProjectPath, fileName);
+  async function resolveFileUri(fileName: string, scope?: Project | string): Promise<URI | undefined> {
+    if (scope instanceof Project) {
+      const referenceUri = await ReferenceFileScanner.findReferenceUri(scope, fileName);
+      if (referenceUri) return referenceUri;
+      if (scope.uri.scheme === "server") return undefined;
+    } else if (scope) {
+      const foundPath = await ReferenceFileScanner.findFileInReferenceFolder(scope, fileName);
       if (foundPath) return URI.file(foundPath);
     }
     const recentFiles = await RecentFileManager.getRecentFiles();
@@ -119,17 +123,17 @@ export namespace GenerateScreenshot {
    * @param fileName 文件名
    * @param sectionName 分组框名
    * @param maxDimension 自定义最大边长度，默认为1920
-   * @param currentProjectPath 当前项目路径（用于在引用文件夹中优先查找）
+   * @param scopeProject 当前项目（用于在引用索引中优先查找）
    * @returns 截图的Blob对象
    */
   export async function generateSection(
     fileName: string,
     sectionName: string,
     maxDimension: number = 1920,
-    currentProjectPath?: string,
+    scopeProject?: Project | string,
   ): Promise<Blob | undefined> {
     try {
-      const fileUri = await resolveFileUri(fileName, currentProjectPath);
+      const fileUri = await resolveFileUri(fileName, scopeProject);
       if (!fileUri) return undefined;
 
       const project = new Project(fileUri);
@@ -163,16 +167,16 @@ export namespace GenerateScreenshot {
    *
    * @param fileName 文件名
    * @param maxDimension 自定义最大边长度，默认为1920
-   * @param currentProjectPath 当前项目路径（用于在引用文件夹中优先查找）
+   * @param scopeProject 当前项目（用于在引用索引中优先查找）
    * @returns 截图的Blob对象
    */
   export async function generateFullView(
     fileName: string,
     maxDimension: number = 1920,
-    currentProjectPath?: string,
+    scopeProject?: Project | string,
   ): Promise<Blob | undefined> {
     try {
-      const fileUri = await resolveFileUri(fileName, currentProjectPath);
+      const fileUri = await resolveFileUri(fileName, scopeProject);
       if (!fileUri) return undefined;
 
       const project = new Project(fileUri);

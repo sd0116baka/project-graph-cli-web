@@ -168,6 +168,104 @@ describe("@graphif/project-graph-web-server", () => {
     expect(scan.body).toMatchObject({ ok: false, code: "folder_scan_disabled" });
   });
 
+  it("creates and resolves server project references", async () => {
+    const server = await startServer();
+    const sourceId = await createProject(server);
+
+    const created = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Design Notes" }),
+    });
+    const repeated = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Design Notes" }),
+    });
+    const resolved = await requestJson(server, `/api/projects/${sourceId}/references/Design%20Notes`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const listed = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const query = await requestJson(
+      server,
+      `/api/projects/${created.body.reference.projectId}/query?text=Design%20Notes`,
+      {
+        headers: { "X-Project-Graph-Client": "server-test" },
+      },
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.body.reference).toMatchObject({
+      name: "Design Notes",
+      projectId: expect.any(String),
+      created: true,
+      project: { name: "Design Notes", revisionToken: expect.any(String) },
+    });
+    expect(repeated.response.status).toBe(200);
+    expect(repeated.body.reference).toMatchObject({
+      name: "Design Notes",
+      projectId: created.body.reference.projectId,
+      created: false,
+    });
+    expect(resolved.body.reference).toMatchObject({
+      name: "Design Notes",
+      projectId: created.body.reference.projectId,
+    });
+    expect(listed.body.references).toEqual([
+      expect.objectContaining({ name: "Design Notes", projectId: created.body.reference.projectId }),
+    ]);
+    expect(query.body.result).toMatchObject({ total: 1 });
+  });
+
+  it("keeps concurrent server reference creation idempotent", async () => {
+    const server = await startServer();
+    const sourceId = await createProject(server);
+    const request = () =>
+      requestJson(server, `/api/projects/${sourceId}/references`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+        body: JSON.stringify({ name: "Concurrent Notes" }),
+      });
+
+    const [first, second] = await Promise.all([request(), request()]);
+    const listed = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const projects = await requestJson(server, "/api/projects", {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+
+    expect([first.response.status, second.response.status].sort()).toEqual([200, 201]);
+    expect(first.body.reference.projectId).toBe(second.body.reference.projectId);
+    expect(listed.body.references).toEqual([
+      expect.objectContaining({ name: "Concurrent Notes", projectId: first.body.reference.projectId }),
+    ]);
+    expect(projects.body.projects.filter((project) => project.name === "Concurrent Notes")).toHaveLength(1);
+  });
+
+  it("removes references when a server project is deleted", async () => {
+    const server = await startServer();
+    const sourceId = await createProject(server);
+    const created = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "server-test" },
+      body: JSON.stringify({ name: "Delete Me" }),
+    });
+
+    const deletedTarget = await requestJson(server, `/api/projects/${created.body.reference.projectId}`, {
+      method: "DELETE",
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const listed = await requestJson(server, `/api/projects/${sourceId}/references`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+
+    expect(deletedTarget.response.status).toBe(200);
+    expect(listed.body.references).toEqual([]);
+  });
+
   it("publishes project change events over SSE", async () => {
     const server = await startServer();
     const abort = new AbortController();

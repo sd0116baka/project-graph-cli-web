@@ -3,6 +3,8 @@ import { Vector } from "@graphif/data-structures";
 import { Section } from "../../stageObject/entity/Section";
 import { toast } from "sonner";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
+import { ReferenceFileScanner } from "@/core/service/dataFileService/ReferenceFileScanner";
+import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import { PathString } from "@/utils/pathString";
 import { onOpenFile } from "@/core/service/GlobalMenu";
 import { ReferenceBlockNode } from "../../stageObject/entity/ReferenceBlockNode";
@@ -132,14 +134,10 @@ export class ReferenceManager {
     const fileNameList = this.project.references.sections[sectionName];
     const fileNameListNew = [];
     for (const fileName of fileNameList) {
-      const file = recentFiles.find(
-        (file) =>
-          PathString.getFileNameFromPath(file.uri.path) === fileName ||
-          PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
-      );
-      if (file) {
+      const uri = await this.resolveReferenceUri(fileName, recentFiles);
+      if (uri) {
         // 即使文件存在，也要打开看一看引用块是否在那个文件中。
-        const thatProject = new Project(file.uri);
+        const thatProject = new Project(uri);
         loadAllServicesBeforeInit(thatProject);
         await thatProject.init();
         if (
@@ -179,14 +177,10 @@ export class ReferenceManager {
     // 遍历每一个直接引用自己整个文件的文件
     const fileNameListNew = [];
     for (const fileName of this.project.references.files) {
-      const file = recentFiles.find(
-        (file) =>
-          PathString.getFileNameFromPath(file.uri.path) === fileName ||
-          PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
-      );
-      if (file) {
+      const uri = await this.resolveReferenceUri(fileName, recentFiles);
+      if (uri) {
         // 即使文件存在，也要打开看一看引用块是否在那个文件中。
-        const thatProject = new Project(file.uri);
+        const thatProject = new Project(uri);
         loadAllServicesBeforeInit(thatProject);
         await thatProject.init();
         if (this.checkReferenceBlockInProject(thatProject, fileName, "")) {
@@ -213,32 +207,25 @@ export class ReferenceManager {
 
   public async insertRefDataToSourcePrgFile(fileName: string, sectionName: string) {
     // 更新被引用文件的reference.msgpack
-    const currentFileName = PathString.getFileNameFromPath(this.project.uri.path);
+    const currentFileName = await this.currentProjectReferenceName();
     if (!currentFileName) return;
 
     try {
       // 根据文件名查找被引用文件
-      const recentFiles = await RecentFileManager.getRecentFiles();
-      const referencedFile = recentFiles.find(
-        (file) =>
-          PathString.getFileNameFromPath(file.uri.path) === fileName ||
-          PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
-      );
-      if (!referencedFile) return;
+      const referencedUri = await this.resolveReferenceUri(fileName);
+      if (!referencedUri) return;
 
       // 先检查当前是否已经打开了该文件的Project实例
       const allProjects = store.get(tabsAtom);
       let referencedProject = allProjects.find((tab) => {
         if (!(tab instanceof Project)) return false;
-        const projectFileName = PathString.getFileNameFromPath(tab.uri.path);
-        const projectFileNameFs = PathString.getFileNameFromPath(tab.uri.fsPath);
-        return projectFileName === fileName || projectFileNameFs === fileName;
+        return tab.uri.toString() === referencedUri.toString();
       }) as Project | undefined;
 
       // 如果没有打开，则创建新的Project实例
       let shouldDisposeProject = false;
       if (!referencedProject) {
-        referencedProject = new Project(referencedFile.uri);
+        referencedProject = new Project(referencedUri);
         loadAllServicesBeforeInit(referencedProject);
         await referencedProject.init();
         shouldDisposeProject = true;
@@ -287,17 +274,12 @@ export class ReferenceManager {
    * @param section
    */
   public async jumpToReferenceLocation(fileName: string, referenceBlockNodeSectionName: string) {
-    const recentFiles = await RecentFileManager.getRecentFiles();
-    const file = recentFiles.find(
-      (file) =>
-        PathString.getFileNameFromPath(file.uri.path) === fileName ||
-        PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
-    );
-    if (!file) {
+    const uri = await this.resolveReferenceUri(fileName);
+    if (!uri) {
       toast.error(`文件 ${fileName} 未找到`);
       return;
     }
-    const project = await onOpenFile(file.uri, "ReferencesWindow跳转打开-prg文件");
+    const project = await onOpenFile(uri, "ReferencesWindow跳转打开-prg文件");
     // 从被引用的源头，跳转到引用的地方
     if (project && referenceBlockNodeSectionName) {
       setTimeout(() => {
@@ -328,5 +310,27 @@ export class ReferenceManager {
       section.text,
       this.project.renderer.transformWorld2View(section.rectangle.leftTop),
     );
+  }
+
+  private async resolveReferenceUri(fileName: string, recentFiles?: RecentFileManager.RecentFile[]) {
+    const referenceUri = await ReferenceFileScanner.findReferenceUri(this.project, fileName);
+    if (referenceUri) return referenceUri;
+    if (this.project.uri.scheme === "server") return undefined;
+
+    const files = recentFiles ?? (await RecentFileManager.getRecentFiles());
+    return files.find(
+      (file) =>
+        PathString.getFileNameFromPath(file.uri.path) === fileName ||
+        PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
+    )?.uri;
+  }
+
+  private async currentProjectReferenceName() {
+    if (this.project.uri.scheme === "server") {
+      const projectId = ServerProjectManager.projectIdFromUri(this.project.uri);
+      const serverProject = (await ServerProjectManager.listProjects()).find((project) => project.id === projectId);
+      return serverProject?.name ?? projectId;
+    }
+    return PathString.getFileNameFromPath(this.project.uri.path);
   }
 }

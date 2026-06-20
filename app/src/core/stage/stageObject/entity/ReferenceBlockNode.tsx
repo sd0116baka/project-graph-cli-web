@@ -1,6 +1,6 @@
 import { randomUUID } from "@/utils/randomUUID";
 import { Project } from "@/core/Project";
-import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
+import { ReferenceFileScanner } from "@/core/service/dataFileService/ReferenceFileScanner";
 import { GenerateScreenshot } from "@/core/service/dataGenerateService/generateScreenshot";
 import { onOpenFile } from "@/core/service/GlobalMenu";
 import { ConnectableEntity } from "@/core/stage/stageObject/abstract/ConnectableEntity";
@@ -109,17 +109,12 @@ export class ReferenceBlockNode extends ConnectableEntity implements ResizeAble 
       this.state = "loading";
       let screenshotBlob;
 
-      const currentProjectPath = this.project.isDraft ? undefined : this.project.uri.fsPath;
+      const scopeProject = this.project.isDraft ? undefined : this.project;
 
       if (this.sectionName) {
-        screenshotBlob = await GenerateScreenshot.generateSection(
-          this.fileName,
-          this.sectionName,
-          1920,
-          currentProjectPath,
-        );
+        screenshotBlob = await GenerateScreenshot.generateSection(this.fileName, this.sectionName, 1920, scopeProject);
       } else {
-        screenshotBlob = await GenerateScreenshot.generateFullView(this.fileName, 1920, currentProjectPath);
+        screenshotBlob = await GenerateScreenshot.generateFullView(this.fileName, 1920, scopeProject);
       }
 
       if (screenshotBlob) {
@@ -197,17 +192,12 @@ export class ReferenceBlockNode extends ConnectableEntity implements ResizeAble 
       this.focusSectionInProject(this.project);
       return;
     }
-    const recentFiles = await RecentFileManager.getRecentFiles();
-    const file = recentFiles.find(
-      (file) =>
-        PathString.getFileNameFromPath(file.uri.path) === this.fileName ||
-        PathString.getFileNameFromPath(file.uri.fsPath) === this.fileName,
-    );
-    if (!file) {
+    const uri = await ReferenceFileScanner.findReferenceUri(this.project, this.fileName);
+    if (!uri) {
       return;
     }
     // 跳转到源头：对应的源头Section
-    const project = await onOpenFile(file.uri, "ReferenceBlockNode跳转打开-prg文件");
+    const project = await onOpenFile(uri, "ReferenceBlockNode跳转打开-prg文件");
     if (!project) {
       return;
     }

@@ -2,6 +2,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { loadAllServicesBeforeInit } from "@/core/loadAllServices";
 import { Project } from "@/core/Project";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
+import { ReferenceFileScanner } from "@/core/service/dataFileService/ReferenceFileScanner";
 import { Settings } from "@/core/service/Settings";
 import { Edge } from "@/core/stage/stageObject/association/Edge";
 import { LineEdge } from "@/core/stage/stageObject/association/LineEdge";
@@ -497,17 +498,12 @@ export namespace TextNodeSmartTools {
    * 加载被引用文件，提取目标Section（或全文件）的所有文本内容，返回markdown字符串。
    * 找不到文件或Section时静默返回空字符串。
    */
-  async function extractSectionText(fileName: string, sectionName: string): Promise<string> {
+  async function extractSectionText(fileName: string, sectionName: string, scopeProject?: Project): Promise<string> {
     try {
-      const recentFiles = await RecentFileManager.getRecentFiles();
-      const file = recentFiles.find(
-        (f) =>
-          PathString.getFileNameFromPath(f.uri.path) === fileName ||
-          PathString.getFileNameFromPath(f.uri.fsPath) === fileName,
-      );
-      if (!file) return "";
+      const fileUri = await resolveReferenceUri(fileName, scopeProject);
+      if (!fileUri) return "";
 
-      const tempProject = new Project(file.uri);
+      const tempProject = new Project(fileUri);
       loadAllServicesBeforeInit(tempProject);
       await tempProject.init();
 
@@ -532,6 +528,20 @@ export namespace TextNodeSmartTools {
     } catch {
       return "";
     }
+  }
+
+  async function resolveReferenceUri(fileName: string, scopeProject?: Project) {
+    if (scopeProject && !scopeProject.isDraft) {
+      const referenceUri = await ReferenceFileScanner.findReferenceUri(scopeProject, fileName);
+      if (referenceUri) return referenceUri;
+      if (scopeProject.uri.scheme === "server") return undefined;
+    }
+    const recentFiles = await RecentFileManager.getRecentFiles();
+    return recentFiles.find(
+      (f) =>
+        PathString.getFileNameFromPath(f.uri.path) === fileName ||
+        PathString.getFileNameFromPath(f.uri.fsPath) === fileName,
+    )?.uri;
   }
 
   /**
@@ -610,7 +620,7 @@ export namespace TextNodeSmartTools {
     project.stageManager.add(section);
 
     // 步骤4：提取被引用 Section 内的所有文字到 details，供当前项目搜索
-    const markdown = await extractSectionText(fileName, sectionName);
+    const markdown = await extractSectionText(fileName, sectionName, project);
     if (markdown.trim()) {
       referenceBlock.details = DetailsManager.markdownToDetails(markdown);
     }

@@ -3,6 +3,7 @@ import { Project } from "@/core/Project";
 import { PathString } from "@/utils/pathString";
 import { RecentFileManager } from "../dataFileService/RecentFileManager";
 import { Section } from "@/core/stage/stageObject/entity/Section";
+import { ReferenceFileScanner } from "@/core/service/dataFileService/ReferenceFileScanner";
 
 /**
  * 跨文件内容查询服务
@@ -19,28 +20,22 @@ export namespace CrossFileContentQuery {
    * @param fileName 文件名
    * @returns 分组框名称数组
    */
-  export async function getSectionsByFileName(fileName: string): Promise<string[]> {
+  export async function getSectionsByFileName(fileName: string, scopeProject?: Project): Promise<string[]> {
+    const cacheKey = scopeProject ? `${scopeProject.uri.toString()}::${fileName}` : fileName;
     // 检查缓存是否存在且未过期
-    const cached = sectionCache.get(fileName);
+    const cached = sectionCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TIME) {
       return cached.sections;
     }
 
     try {
-      // 1. 根据文件名查找并加载prg文件
-      const recentFiles = await RecentFileManager.getRecentFiles();
-      const file = recentFiles.find(
-        (file) =>
-          PathString.getFileNameFromPath(file.uri.path) === fileName ||
-          PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
-      );
-      if (!file) {
+      const fileUri = await resolveFileUri(fileName, scopeProject);
+      if (!fileUri) {
         // 如果文件不存在，返回空数组
-        sectionCache.set(fileName, { sections: [], timestamp: Date.now() });
+        sectionCache.set(cacheKey, { sections: [], timestamp: Date.now() });
         return [];
       }
 
-      const fileUri = file.uri;
       const project = new Project(fileUri);
       loadAllServicesBeforeInit(project);
       await project.init();
@@ -51,7 +46,7 @@ export namespace CrossFileContentQuery {
         .map((section) => (section as Section).text);
 
       // 3. 缓存结果
-      sectionCache.set(fileName, { sections, timestamp: Date.now() });
+      sectionCache.set(cacheKey, { sections, timestamp: Date.now() });
 
       // 4. 清理资源
       project.dispose();
@@ -60,7 +55,7 @@ export namespace CrossFileContentQuery {
     } catch (error) {
       console.error("获取文件中的分组框失败", error);
       // 错误时也缓存空结果，避免频繁重试
-      sectionCache.set(fileName, { sections: [], timestamp: Date.now() });
+      sectionCache.set(cacheKey, { sections: [], timestamp: Date.now() });
       return [];
     }
   }
@@ -75,5 +70,20 @@ export namespace CrossFileContentQuery {
     } else {
       sectionCache.clear();
     }
+  }
+
+  async function resolveFileUri(fileName: string, scopeProject?: Project) {
+    if (scopeProject && !scopeProject.isDraft) {
+      const referenceUri = await ReferenceFileScanner.findReferenceUri(scopeProject, fileName);
+      if (referenceUri) return referenceUri;
+      if (scopeProject.uri.scheme === "server") return undefined;
+    }
+
+    const recentFiles = await RecentFileManager.getRecentFiles();
+    return recentFiles.find(
+      (file) =>
+        PathString.getFileNameFromPath(file.uri.path) === fileName ||
+        PathString.getFileNameFromPath(file.uri.fsPath) === fileName,
+    )?.uri;
   }
 }

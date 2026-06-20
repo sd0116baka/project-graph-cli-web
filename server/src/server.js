@@ -23,6 +23,7 @@ const projectsDir = path.join(dataDir, "projects");
 const backupsDir = path.join(dataDir, "backups");
 const metadataPath = path.join(dataDir, "projects.json");
 const locksPath = path.join(dataDir, "locks.json");
+const referencesPath = path.join(dataDir, "references.json");
 const staticDir = process.env.PG_WEB_STATIC_DIR ? path.resolve(process.env.PG_WEB_STATIC_DIR) : "";
 const port = Number(process.env.PORT ?? process.env.PG_WEB_PORT ?? 37820);
 const host = process.env.HOST ?? process.env.PG_WEB_HOST ?? "0.0.0.0";
@@ -244,6 +245,29 @@ async function handleApi(req, res, requestUrl) {
       return;
     }
 
+    if (segments.length === 4 && segments[3] === "references") {
+      if (req.method === "GET") {
+        sendJson(res, 200, { ok: true, references: await listProjectReferences(id) });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJson(req);
+        const reference = await runProjectMutation(id, () => ensureProjectReference(id, body?.name));
+        publishEvent("references_changed", { projectId: id, reference });
+        if (reference.created) {
+          publishEvent("project_created", { projectId: reference.projectId, project: reference.project });
+        }
+        sendJson(res, reference.created ? 201 : 200, { ok: true, reference });
+        return;
+      }
+    }
+
+    if (segments.length === 5 && segments[3] === "references" && req.method === "GET") {
+      const reference = await resolveProjectReference(id, decodeURIComponent(segments[4]));
+      sendJson(res, 200, { ok: true, reference });
+      return;
+    }
+
     if (segments.length === 4 && segments[3] === "backup" && req.method === "POST") {
       const requestContent = await readBinary(req);
       const backup = await runProjectMutation(id, async () => {
@@ -377,6 +401,7 @@ async function ensureLayout() {
   await fs.mkdir(backupsDir, { recursive: true });
   await ensureJson(metadataPath, {});
   await ensureJson(locksPath, {});
+  await ensureJson(referencesPath, {});
 }
 
 async function ensureJson(filePath, fallback) {
@@ -488,6 +513,10 @@ async function removeProject(id) {
   await saveJson(locksPath, locks);
   await fs.rm(projectFilePath(id), { force: true });
   await fs.rm(path.join(backupsDir, id), { recursive: true, force: true });
+  const affectedReferenceSources = await removeProjectReferences(id);
+  for (const sourceId of affectedReferenceSources) {
+    publishEvent("references_changed", { projectId: sourceId, removedProjectId: id });
+  }
 }
 
 async function sendProjectBlob(res, id, headOnly) {
@@ -562,6 +591,14 @@ async function ensureProjectMetadata(id) {
   await saveJson(metadataPath, metadata);
 }
 
+async function assertProjectMetadata(id) {
+  const metadata = await loadJson(metadataPath, {});
+  if (!metadata[id]) {
+    throw createHttpError("Project not found", 404, "project_not_found");
+  }
+  return metadata[id];
+}
+
 async function touchProjectMetadata(id, size) {
   const metadata = await loadJson(metadataPath, {});
   const now = new Date().toISOString();
@@ -627,6 +664,84 @@ async function restoreProjectRevision(id, revision) {
   await ensureProjectMetadata(id);
   const content = await fs.readFile(path.join(backupsDir, id, revision));
   return writeProjectBlob(id, content);
+}
+
+async function listProjectReferences(sourceId) {
+  await assertProjectMetadata(sourceId);
+  const references = await loadJson(referencesPath, {});
+  const entries = Object.values(references[sourceId] ?? {});
+  entries.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return entries;
+}
+
+async function resolveProjectReference(sourceId, rawName) {
+  await assertProjectMetadata(sourceId);
+  const name = normalizeReferenceName(rawName);
+  const references = await loadJson(referencesPath, {});
+  const reference = references[sourceId]?.[name];
+  if (!reference) {
+    throw createHttpError("Project reference not found", 404, "project_reference_not_found", { name });
+  }
+  return reference;
+}
+
+async function ensureProjectReference(sourceId, rawName) {
+  await assertProjectMetadata(sourceId);
+  const name = normalizeReferenceName(rawName);
+  const references = await loadJson(referencesPath, {});
+  const existing = references[sourceId]?.[name];
+  if (existing) {
+    return { ...existing, created: false };
+  }
+
+  const project = await createProject(name);
+  const archive = importMarkdown(`# ${name}\n`, { prgVersion: "2.4.0" });
+  const data = Buffer.from(await writePrgData(archive, { preserveExtraEntries: true, preserveThumbnail: true }));
+  const etag = await writeProjectBlob(project.id, data);
+  const now = new Date().toISOString();
+  const reference = {
+    name,
+    projectId: project.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+  references[sourceId] = {
+    ...(references[sourceId] ?? {}),
+    [name]: reference,
+  };
+  await saveJson(referencesPath, references);
+  return {
+    ...reference,
+    project: { ...project, size: data.byteLength, etag, revisionToken: etag },
+    created: true,
+  };
+}
+
+async function removeProjectReferences(projectId) {
+  const references = await loadJson(referencesPath, {});
+  let changed = false;
+  const affectedSourceIds = new Set();
+  if (references[projectId]) {
+    delete references[projectId];
+    changed = true;
+    affectedSourceIds.add(projectId);
+  }
+  for (const [sourceId, sourceReferences] of Object.entries(references)) {
+    for (const [name, reference] of Object.entries(sourceReferences ?? {})) {
+      if (reference?.projectId === projectId) {
+        delete references[sourceId][name];
+        changed = true;
+        affectedSourceIds.add(sourceId);
+      }
+    }
+    if (references[sourceId] && Object.keys(references[sourceId]).length === 0) {
+      delete references[sourceId];
+    }
+  }
+  if (changed) {
+    await saveJson(referencesPath, references);
+  }
+  return [...affectedSourceIds];
 }
 
 async function scanFolderStructure(body) {
@@ -1094,6 +1209,19 @@ function normalizeProjectName(name) {
     .trim()
     .replace(/\s+/g, " ");
   return normalized.slice(0, 120) || "Untitled Project";
+}
+
+function normalizeReferenceName(name) {
+  const normalized = String(name ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!normalized) {
+    throw createHttpError("Reference name is required", 400, "reference_name_required");
+  }
+  if (normalized.length > 120 || /[\\/#\0]/.test(normalized)) {
+    throw createHttpError("Invalid reference name", 400, "invalid_reference_name");
+  }
+  return normalized;
 }
 
 function normalizeClientName(name) {
