@@ -1,4 +1,5 @@
 import { randomUUID } from "../../../utils/randomUUID";
+import { isBrowserRuntime, isTauriRuntime } from "@/utils/runtime";
 import { URI } from "vscode-uri";
 
 export namespace ServerProjectManager {
@@ -420,6 +421,21 @@ export namespace ServerProjectManager {
     return projectEtags.get(id);
   }
 
+  export async function createProjectBackup(id: string, content?: Uint8Array): Promise<ProjectHistoryEntry> {
+    const headers: Record<string, string> = {};
+    let body: ArrayBuffer | undefined;
+    if (content) {
+      headers["Content-Type"] = "application/vnd.project-graph";
+      body = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
+    }
+    const data = await apiJson<{ backup: ProjectHistoryEntry }>(`/api/projects/${encodeURIComponent(id)}/backup`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    return data.backup;
+  }
+
   export async function projectBlobExists(id: string): Promise<boolean> {
     await ensureBackendConnection();
     const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(id)}/blob`), {
@@ -548,7 +564,7 @@ export namespace ServerProjectManager {
     if (base) {
       return `${base}${path}`;
     }
-    if (typeof window !== "undefined" && !isTauriRuntime()) {
+    if (isBrowserRuntime()) {
       return new URL(path, window.location.origin).toString();
     }
     throwProjectError({
@@ -560,10 +576,6 @@ export namespace ServerProjectManager {
     });
   }
 
-  function isTauriRuntime(): boolean {
-    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  }
-
   function serverBaseUrl(): string {
     if (activeServerBaseUrl) return activeServerBaseUrl;
     if (typeof localStorage !== "undefined") {
@@ -572,7 +584,7 @@ export namespace ServerProjectManager {
     }
     const envUrl = import.meta.env.LR_PROJECT_GRAPH_SERVER_URL?.replace(/\/$/, "") ?? "";
     if (envUrl) return envUrl;
-    if (typeof window !== "undefined" && !isTauriRuntime()) {
+    if (isBrowserRuntime()) {
       return window.location.origin;
     }
     return "";

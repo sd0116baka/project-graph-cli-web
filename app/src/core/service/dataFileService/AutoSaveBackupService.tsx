@@ -5,6 +5,8 @@ import { exists, writeFile, readDir, stat, remove, mkdir } from "@tauri-apps/plu
 import { Settings } from "@/core/service/Settings";
 import { toast } from "sonner";
 import { PathString } from "@/utils/pathString";
+import { isTauriRuntime } from "@/utils/runtime";
+import { ServerProjectManager } from "./ServerProjectManager";
 
 /**
  * 自动保存与备份系统
@@ -63,6 +65,18 @@ export class AutoSaveBackupService {
   private async autoBackup() {
     const currentHash = this.project.stageHash;
     if (currentHash === this.lastBackupHash) {
+      return;
+    }
+
+    if (this.project.uri.scheme === "server") {
+      const ok = await this.backupServerProject(false);
+      if (ok) {
+        this.lastBackupHash = currentHash;
+      }
+      return;
+    }
+
+    if (!this.canUseLocalBackup()) {
       return;
     }
 
@@ -162,6 +176,16 @@ export class AutoSaveBackupService {
   }
 
   public async manualBackup() {
+    if (this.project.uri.scheme === "server") {
+      await this.backupServerProject(true);
+      return;
+    }
+
+    if (!this.canUseLocalBackup()) {
+      toast.warning("浏览器端仅支持备份服务器项目；本地项目需要在桌面端备份。");
+      return;
+    }
+
     try {
       const backupDir = await join(await appCacheDir(), "manual-backup-v2");
       await this.backupCurrentProject(backupDir);
@@ -310,6 +334,25 @@ export class AutoSaveBackupService {
       }
     } catch (err) {
       toast.error(`管理备份文件失败: ${err}`);
+    }
+  }
+
+  private canUseLocalBackup(): boolean {
+    return isTauriRuntime();
+  }
+
+  private async backupServerProject(showSuccess: boolean): Promise<boolean> {
+    try {
+      const projectId = ServerProjectManager.projectIdFromUri(this.project.uri);
+      const fileContent = await this.project.getFileContent({ includeThumbnail: false });
+      const backup = await ServerProjectManager.createProjectBackup(projectId, fileContent);
+      if (showSuccess) {
+        toast.success(`服务器备份已创建：${new Date(backup.createdAt).toLocaleString()}`);
+      }
+      return true;
+    } catch (error) {
+      toast.error(`服务器备份失败: ${ServerProjectManager.formatError(error)}`);
+      return false;
     }
   }
 }

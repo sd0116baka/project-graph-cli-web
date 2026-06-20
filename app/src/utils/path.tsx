@@ -1,10 +1,10 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { sep } from "@tauri-apps/api/path";
+import { isTauriRuntime } from "@/utils/runtime";
 import { URI } from "vscode-uri";
 
 export class Path {
   private readonly path: string;
-  static sep = isTauri() ? sep() : "/";
+  static sep = isTauriRuntime() ? sep() : "/";
 
   constructor(path: string);
   constructor(uri: URI);

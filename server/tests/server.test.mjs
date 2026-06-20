@@ -198,6 +198,46 @@ describe("@graphif/project-graph-web-server", () => {
     expect(restoredValidation.body).toMatchObject({ ok: true, issues: [] });
   });
 
+  it("creates explicit history backups from uploaded project snapshots", async () => {
+    const server = await startServer();
+    const projectId = await createProject(server);
+    await putArchive(server, projectId, createArchiveWithThumbnail());
+    const snapshotArchive = importMarkdown("# Intake\n\n## Browser Snapshot\n", { prgVersion: "2.4.0" });
+    const snapshotData = await writePrgData(snapshotArchive, { preserveExtraEntries: true, preserveThumbnail: true });
+
+    const backup = await requestJson(server, `/api/projects/${projectId}/backup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.project-graph",
+        "X-Project-Graph-Client": "browser-client",
+      },
+      body: snapshotData,
+    });
+    const history = await requestJson(server, `/api/projects/${projectId}/history`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const restored = await requestJson(server, `/api/projects/${projectId}/restore/${backup.body.backup.revision}`, {
+      method: "POST",
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+    const query = await requestJson(server, `/api/projects/${projectId}/query?kind=node&text=Browser%20Snapshot`, {
+      headers: { "X-Project-Graph-Client": "server-test" },
+    });
+
+    expect(backup.response.status).toBe(201);
+    expect(backup.body).toMatchObject({
+      ok: true,
+      backup: {
+        revision: expect.any(String),
+        size: snapshotData.byteLength,
+        createdAt: expect.any(String),
+      },
+    });
+    expect(history.body.history.some((entry) => entry.revision === backup.body.backup.revision)).toBe(true);
+    expect(restored.response.status).toBe(200);
+    expect(query.body.result).toMatchObject({ total: 1 });
+  });
+
   it("rejects invalid import payloads as request errors", async () => {
     const server = await startServer();
     const invalidPgJson = await requestJson(server, "/api/projects/import", {

@@ -123,6 +123,7 @@ async function handleApi(req, res, requestUrl) {
         validate: true,
         import: true,
         history: true,
+        backup: true,
         restore: true,
         locks: true,
         events: true,
@@ -229,6 +230,18 @@ async function handleApi(req, res, requestUrl) {
 
     if (segments.length === 4 && segments[3] === "history" && req.method === "GET") {
       sendJson(res, 200, { history: await listProjectHistory(id) });
+      return;
+    }
+
+    if (segments.length === 4 && segments[3] === "backup" && req.method === "POST") {
+      const requestContent = await readBinary(req);
+      const backup = await runProjectMutation(id, async () => {
+        await ensureProjectMetadata(id);
+        const content = requestContent.byteLength > 0 ? requestContent : await readProjectBlobForBackup(id);
+        return writeBackup(id, content);
+      });
+      publishEvent("history_changed", { projectId: id, revision: backup.revision });
+      sendJson(res, 201, { ok: true, backup });
       return;
     }
 
@@ -554,8 +567,21 @@ async function touchProjectMetadata(id, size) {
 async function writeBackup(id, content) {
   const dir = path.join(backupsDir, id);
   await fs.mkdir(dir, { recursive: true });
-  const revision = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-  await fs.writeFile(path.join(dir, `${revision}.prg`), content);
+  const revisionBase = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  let revision = `${revisionBase}.prg`;
+  let attempt = 0;
+  while (await pathExists(path.join(dir, revision))) {
+    attempt += 1;
+    revision = `${revisionBase}-${attempt}.prg`;
+  }
+  const backupPath = path.join(dir, revision);
+  await fs.writeFile(backupPath, content);
+  const stat = await fs.stat(backupPath);
+  return {
+    revision,
+    size: stat.size,
+    createdAt: stat.mtime.toISOString(),
+  };
 }
 
 async function listProjectHistory(id) {
@@ -575,6 +601,15 @@ async function listProjectHistory(id) {
   );
   history.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return history;
+}
+
+async function readProjectBlobForBackup(id) {
+  return fs.readFile(projectFilePath(id)).catch((error) => {
+    if (error?.code === "ENOENT") {
+      throw createHttpError("Project file not found", 404, "project_file_not_found");
+    }
+    throw error;
+  });
 }
 
 async function restoreProjectRevision(id, revision) {
@@ -606,6 +641,13 @@ async function runProjectMutation(id, task) {
 async function getProjectEtag(id) {
   const content = await fs.readFile(projectFilePath(id)).catch(() => null);
   return content ? etagForBuffer(content) : null;
+}
+
+async function pathExists(filePath) {
+  return fs
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
 }
 
 async function getActiveLock(id) {
