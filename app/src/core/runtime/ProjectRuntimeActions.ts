@@ -29,6 +29,11 @@ export namespace ProjectRuntimeActions {
     createdAt?: string;
   };
 
+  export type ProjectExportResult = {
+    runtime: RuntimeKind;
+    status: "exported" | "cancelled";
+  };
+
   export type ProjectRuntimeCapabilities = {
     backup: boolean;
     saveAs: boolean;
@@ -51,7 +56,7 @@ export namespace ProjectRuntimeActions {
     revealProjectLocation(context: ProjectActionContext): Promise<void>;
     importFilesToStage(context: ProjectActionContext, kind: ImportFileKind): Promise<void>;
     importFolderToStage(context: ProjectActionContext, mode: FolderImportMode): Promise<void>;
-    exportBlob(context: ProjectActionContext, blob: Blob, suggestedName: string): Promise<void>;
+    exportBlob(context: ProjectActionContext, blob: Blob, suggestedName: string): Promise<ProjectExportResult>;
     scanFolderForStage(context: ProjectActionContext, source: FolderSource): Promise<FolderEntry>;
   };
 
@@ -99,6 +104,13 @@ export namespace ProjectRuntimeActions {
     return resolve(project);
   }
 
+  export function resolveForBlobExport(): ProjectRuntimeActionSet {
+    if (isTauriRuntime()) {
+      return tauriProjectActions;
+    }
+    return browserProjectActions;
+  }
+
   export function canUseLocalProjectFileSystem(project: Project): boolean {
     return resolve(project).kind === "tauri";
   }
@@ -121,6 +133,10 @@ export namespace ProjectRuntimeActions {
 
   export async function importFolderToStage(project: Project, mode: FolderImportMode): Promise<void> {
     return resolve(project).importFolderToStage({ project }, mode);
+  }
+
+  export async function exportBlob(project: Project, blob: Blob, suggestedName: string): Promise<ProjectExportResult> {
+    return resolveForBlobExport().exportBlob({ project }, blob, suggestedName);
   }
 
   export function formatError(error: unknown): string {
@@ -250,7 +266,18 @@ export namespace ProjectRuntimeActions {
         await project.generateFromFolder.generateTreeFromFolder(path);
       }
     },
-    exportBlob: unsupported("tauri", "exportBlob", "本地项目导出还没有接入运行时适配层。"),
+    async exportBlob(_context, blob, suggestedName) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      const path = await save({
+        title: "导出文件",
+        defaultPath: suggestedName,
+        filters: exportFilters(suggestedName),
+      });
+      if (!path) return { runtime: "tauri", status: "cancelled" };
+      await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+      return { runtime: "tauri", status: "exported" };
+    },
     scanFolderForStage: unsupported("tauri", "scanFolderForStage", "本地项目文件夹扫描还没有接入运行时适配层。"),
   };
 
@@ -283,7 +310,11 @@ export namespace ProjectRuntimeActions {
       await StageFileImportService.importBrowserFiles(project, files);
     },
     importFolderToStage: unsupported("browser", "importFolderToStage", "浏览器从文件夹生成需要目录选择或上传通道。"),
-    exportBlob: unsupported("browser", "exportBlob", "浏览器导出还没有接入运行时适配层。"),
+    async exportBlob(_context, blob, suggestedName) {
+      const { downloadBrowserBlob } = await import("@/utils/browserFileDialog");
+      downloadBrowserBlob(blob, suggestedName);
+      return { runtime: "browser", status: "exported" };
+    },
     scanFolderForStage: unsupported("browser", "scanFolderForStage", "浏览器文件夹扫描还没有接入运行时适配层。"),
   };
 
@@ -303,7 +334,7 @@ export namespace ProjectRuntimeActions {
     revealProjectLocation: true,
     importFilesToStage: true,
     importFolderToStage: true,
-    exportBlob: false,
+    exportBlob: true,
     scanFolderForStage: false,
   };
 
@@ -313,7 +344,7 @@ export namespace ProjectRuntimeActions {
     revealProjectLocation: false,
     importFilesToStage: true,
     importFolderToStage: false,
-    exportBlob: false,
+    exportBlob: true,
     scanFolderForStage: false,
   };
 
@@ -371,5 +402,12 @@ export namespace ProjectRuntimeActions {
     if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
     if (ext === "webp") return "image/webp";
     return "image/png";
+  }
+
+  function exportFilters(suggestedName: string): { name: string; extensions: string[] }[] {
+    const ext = suggestedName.split(".").pop()?.toLowerCase();
+    if (ext === "svg") return [{ name: "Scalable Vector Graphics", extensions: ["svg"] }];
+    if (ext === "png") return [{ name: "Portable Network Graphics", extensions: ["png"] }];
+    return [{ name: "文件", extensions: ext ? [ext] : [] }];
   }
 }

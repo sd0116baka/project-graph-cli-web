@@ -13,7 +13,6 @@ import { Color, colorInvert, Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import mime from "mime";
 
 export interface SvgExportConfig {
@@ -450,11 +449,23 @@ export class StageExportSvg {
     return ReactDOMServer.renderToStaticMarkup(this.dumpSelected());
   }
 
+  async exportStageToSVGBlob(): Promise<Blob> {
+    return this.exportToSVGBlob(this.project.stageManager.getImageNodes(), () => this.dumpStageToSVGString());
+  }
+
+  async exportSelectedToSVGBlob(): Promise<Blob> {
+    const selectedImageNodes = this.project.stageManager
+      .getSelectedEntities()
+      .filter((entity): entity is ImageNode => entity instanceof ImageNode);
+    return this.exportToSVGBlob(selectedImageNodes, () => this.dumpSelectedToSVGString());
+  }
+
   /**
    * 将整个舞台导出为SVG文件，并导出所有图片附件
    * @param filePath SVG文件保存路径
    */
   async exportStageToSVGFile(filePath: string): Promise<void> {
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
     const outputDir = new Path(filePath).parent.toString();
     const imageNodes = this.project.stageManager.getImageNodes();
     const imageMap = new Map<string, string>();
@@ -501,6 +512,7 @@ export class StageExportSvg {
    * @param filePath SVG文件保存路径
    */
   async exportSelectedToSVGFile(filePath: string): Promise<void> {
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
     const outputDir = new Path(filePath).parent.toString();
     const selectedEntities = this.project.stageManager.getSelectedEntities();
     const imageNodes = selectedEntities.filter((entity): entity is ImageNode => entity instanceof ImageNode);
@@ -542,4 +554,41 @@ export class StageExportSvg {
       this.exportContext = null;
     }
   }
+
+  private async exportToSVGBlob(imageNodes: ImageNode[], render: () => string): Promise<Blob> {
+    const imageMap = await this.createInlineImageMap(imageNodes);
+    this.exportContext = {
+      outputDir: "",
+      imageMap,
+    };
+
+    try {
+      return new Blob([render()], { type: "image/svg+xml;charset=utf-8" });
+    } finally {
+      this.exportContext = null;
+    }
+  }
+
+  private async createInlineImageMap(imageNodes: ImageNode[]): Promise<Map<string, string>> {
+    const imageMap = new Map<string, string>();
+    for (const imageNode of imageNodes) {
+      const attachmentId = imageNode.attachmentId;
+      if (!attachmentId || imageMap.has(attachmentId)) continue;
+
+      const blob = this.project.attachments.get(attachmentId);
+      if (!blob) continue;
+      imageMap.set(attachmentId, await blobToDataUrl(blob));
+    }
+    return imageMap;
+  }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return `data:${blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
 }

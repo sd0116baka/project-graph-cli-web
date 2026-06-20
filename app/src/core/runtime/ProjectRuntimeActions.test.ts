@@ -4,6 +4,14 @@ import { URI } from "vscode-uri";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectRuntimeActions } from "./ProjectRuntimeActions";
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  save: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-fs", () => ({
+  writeFile: vi.fn(),
+}));
+
 function serverInfo(capabilities: Record<string, boolean> = {}): ServerProjectManager.ServerInfo {
   return {
     ok: true,
@@ -30,6 +38,7 @@ function fakeProject(uri: URI, content = new Uint8Array([1, 2, 3])): Project {
 
 describe("ProjectRuntimeActions", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -82,7 +91,7 @@ describe("ProjectRuntimeActions", () => {
       saveAs: false,
       importFilesToStage: true,
       importFolderToStage: false,
-      exportBlob: false,
+      exportBlob: true,
     });
     const backup = ProjectRuntimeActions.createBackup(project);
     expect(backup).toBeInstanceOf(Promise);
@@ -123,6 +132,7 @@ describe("ProjectRuntimeActions", () => {
       revealProjectLocation: true,
       importFilesToStage: true,
       importFolderToStage: true,
+      exportBlob: true,
       scanFolderForStage: false,
     });
     const backup = ProjectRuntimeActions.createBackup(project);
@@ -168,7 +178,49 @@ describe("ProjectRuntimeActions", () => {
     await expect(ProjectRuntimeActions.resolveForFileExchange(project).capabilities(project)).resolves.toMatchObject({
       importFilesToStage: true,
       importFolderToStage: false,
+      exportBlob: true,
     });
+  });
+
+  it("uses the Tauri export action for server projects in Tauri", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    const saveMock = vi.mocked(save);
+    const writeFileMock = vi.mocked(writeFile);
+    saveMock.mockResolvedValue("C:/exports/test.png");
+    writeFileMock.mockResolvedValue(undefined);
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    const result = await ProjectRuntimeActions.exportBlob(
+      project,
+      new Blob([new Uint8Array([7, 8])], { type: "image/png" }),
+      "test.png",
+    );
+
+    expect(result).toEqual({ runtime: "tauri", status: "exported" });
+    expect(saveMock).toHaveBeenCalledWith({
+      title: "导出文件",
+      defaultPath: "test.png",
+      filters: [{ name: "Portable Network Graphics", extensions: ["png"] }],
+    });
+    expect(writeFileMock).toHaveBeenCalledWith("C:/exports/test.png", expect.any(Uint8Array));
+    expect(Array.from(writeFileMock.mock.calls[0][1] as Uint8Array)).toEqual([7, 8]);
+  });
+
+  it("reports cancelled Tauri exports without writing files", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    const saveMock = vi.mocked(save);
+    const writeFileMock = vi.mocked(writeFile);
+    saveMock.mockResolvedValue(null);
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    const result = await ProjectRuntimeActions.exportBlob(project, new Blob(["cancel"]), "test.png");
+
+    expect(result).toEqual({ runtime: "tauri", status: "cancelled" });
+    expect(writeFileMock).not.toHaveBeenCalled();
   });
 
   it("reports visible unsupported errors for server-owned file menu actions in Tauri", async () => {

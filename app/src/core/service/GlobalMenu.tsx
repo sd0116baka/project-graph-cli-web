@@ -483,27 +483,31 @@ export function GlobalMenu() {
                 </SubTrigger>
                 <SubContent>
                   <Item
-                    onClick={async () => {
-                      const path = await save({
-                        title: t("file.exportAsSVG"),
-                        filters: [{ name: "Scalable Vector Graphics", extensions: ["svg"] }],
-                      });
-                      if (!path) return;
-                      await activeProject!.stageExportSvg.exportStageToSVGFile(path);
-                    }}
+                    onClick={() =>
+                      runProjectRuntimeAction(async () => {
+                        const blob = await activeProject!.stageExportSvg.exportStageToSVGBlob();
+                        await ProjectRuntimeActions.exportBlob(
+                          activeProject!,
+                          blob,
+                          `${projectExportBaseName(activeProject!)}.svg`,
+                        );
+                      })
+                    }
                   >
                     <FileDigit />
                     {t("file.exportAll")}
                   </Item>
                   <Item
-                    onClick={async () => {
-                      const path = await save({
-                        title: t("file.exportAsSVG"),
-                        filters: [{ name: "Scalable Vector Graphics", extensions: ["svg"] }],
-                      });
-                      if (!path) return;
-                      await activeProject!.stageExportSvg.exportSelectedToSVGFile(path);
-                    }}
+                    onClick={() =>
+                      runProjectRuntimeAction(async () => {
+                        const blob = await activeProject!.stageExportSvg.exportSelectedToSVGBlob();
+                        await ProjectRuntimeActions.exportBlob(
+                          activeProject!,
+                          blob,
+                          `${projectExportBaseName(activeProject!)}-selected.svg`,
+                        );
+                      })
+                    }
                   >
                     <MousePointer2 />
                     {t("file.exportSelected")}
@@ -1690,6 +1694,12 @@ export function GlobalMenu() {
 
 export function openCurrentProjectFolder(project: Project) {
   return ProjectRuntimeActions.revealProjectLocation(project);
+}
+
+function projectExportBaseName(project: Project): string {
+  const title = project.title.replace(/\.prg$/i, "");
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return safeTitle || "project-graph";
 }
 
 export async function onNewDraft() {

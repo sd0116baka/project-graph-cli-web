@@ -3,13 +3,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { ProjectRuntimeActions } from "@/core/runtime/ProjectRuntimeActions";
 import { SubWindow } from "@/core/service/SubWindow";
 import { activeTabAtom } from "@/state";
 import { GenerateScreenshot } from "@/core/service/dataGenerateService/generateScreenshot";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { useAtom } from "jotai";
 import { Info } from "lucide-react";
 import { useState } from "react";
@@ -50,18 +49,15 @@ export default function NewExportPngWindow() {
           return;
         }
 
-        // 保存文件
-        const path = await save({
-          title: `导出为 PNG`,
-          filters: [{ name: "Portable Network Graphics", extensions: ["png"] }],
-        });
-        if (!path) return;
+        const result = await ProjectRuntimeActions.exportBlob(
+          project,
+          blob,
+          `${projectExportBaseName(project)}-selected.png`,
+        );
 
-        const arrayBuffer = await blob.arrayBuffer();
-        const u8a = new Uint8Array(arrayBuffer);
-        await writeFile(path, u8a);
-
-        toast.success("导出成功");
+        if (result.status === "exported") {
+          toast.success("导出成功");
+        }
       } finally {
         // 恢复原始选中状态
         project.stageManager.clearSelectAll();
@@ -73,8 +69,7 @@ export default function NewExportPngWindow() {
         });
       }
     } catch (error) {
-      console.error("导出PNG失败", error);
-      toast.error("导出PNG失败");
+      toast.error(`导出PNG失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsExporting(false);
     }
@@ -129,3 +124,9 @@ NewExportPngWindow.open = (type: "selected" | "all") => {
     rect: new Rectangle(new Vector(100, 100), new Vector(600, 400)),
   });
 };
+
+function projectExportBaseName(project: Project): string {
+  const title = project.title.replace(/\.prg$/i, "");
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return safeTitle || "project-graph";
+}

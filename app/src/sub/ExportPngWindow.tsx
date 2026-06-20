@@ -4,13 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
+import { ProjectRuntimeActions } from "@/core/runtime/ProjectRuntimeActions";
 import { Settings } from "@/core/service/Settings";
 import { SubWindow } from "@/core/service/SubWindow";
 import { activeTabAtom } from "@/state";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { useAtom } from "jotai";
 import { FileWarning, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -79,24 +78,14 @@ export default function ExportPngWindow() {
         setProgress(-1);
       })
       .on("complete", (blob) => {
-        toast("complete");
         setProgress(-1);
-        const reader = new FileReader();
-        reader.onload = () => {
-          const u8a = new Uint8Array(reader.result as ArrayBuffer);
-          save({
-            filters: [
-              {
-                name: "PNG",
-                extensions: ["png"],
-              },
-            ],
-          }).then((path) => {
-            if (!path) return;
-            writeFile(path, u8a);
-          });
-        };
-        reader.readAsArrayBuffer(blob);
+        ProjectRuntimeActions.exportBlob(project, blob, `${projectExportBaseName(project)}.png`)
+          .then((result) => {
+            if (result.status === "exported") {
+              toast.success("导出成功");
+            }
+          })
+          .catch((error) => toast.error(`导出失败: ${error instanceof Error ? error.message : String(error)}`));
       });
   }
 
@@ -172,3 +161,9 @@ ExportPngWindow.open = () => {
     rect: new Rectangle(new Vector(100, 100), new Vector(600, 700)),
   });
 };
+
+function projectExportBaseName(project: Project): string {
+  const title = project.title.replace(/\.prg$/i, "");
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return safeTitle || "project-graph";
+}
