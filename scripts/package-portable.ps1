@@ -92,6 +92,9 @@ function Resolve-SymlinkTarget {
   $Item = Get-Item -LiteralPath $PathText
   if ($Item.LinkType -and $Item.Target) {
     $Target = @($Item.Target)[0]
+    if ([IO.Path]::IsPathRooted($Target)) {
+      return [IO.Path]::GetFullPath($Target)
+    }
     return [IO.Path]::GetFullPath((Join-Path $Item.Parent.FullName $Target))
   }
   return $Item.FullName

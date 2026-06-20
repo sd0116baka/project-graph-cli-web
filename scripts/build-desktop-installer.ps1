@@ -11,6 +11,14 @@ $AppDir = Join-Path $Root "app"
 $PortableStage = Join-Path $Root "dist\portable\project-graph-cli-web"
 $InstallerConfig = Join-Path $Root "app\src-tauri\tauri.cli-web.conf.json"
 
+$PathParts = @(
+  [Environment]::GetEnvironmentVariable("Path", "Machine"),
+  [Environment]::GetEnvironmentVariable("Path", "User"),
+  (Join-Path $env:USERPROFILE ".cargo\bin"),
+  $env:Path
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+$env:Path = ($PathParts -join ";")
+
 function Invoke-NativeCommand {
   param(
     [Parameter(Mandatory = $true)]
