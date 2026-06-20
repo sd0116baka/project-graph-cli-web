@@ -1,20 +1,16 @@
 import { Project } from "@/core/Project";
 import { CollisionBox } from "@/core/stage/stageObject/collisionBox/collisionBox";
-import { ImageNode } from "@/core/stage/stageObject/entity/ImageNode";
-import { SvgNode } from "@/core/stage/stageObject/entity/SvgNode";
 import { TextNode } from "@/core/stage/stageObject/entity/TextNode";
+import { DetailsManager } from "@/core/stage/stageObject/tools/entityDetailsManager";
+import { PathString } from "@/utils/pathString";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
 import { readFile, stat } from "@tauri-apps/plugin-fs";
 import { toast } from "sonner";
 import { URI } from "vscode-uri";
 import { onOpenFile } from "../../GlobalMenu";
-import { PathString } from "@/utils/pathString";
-import { DetailsManager } from "@/core/stage/stageObject/tools/entityDetailsManager";
 import { Settings } from "@/core/service/Settings";
-import { applyBlackAndWhite } from "../imageUtils";
-import { Section } from "@/core/stage/stageObject/entity/Section";
-import { RectanglePushInEffect } from "../../feedbackService/effectEngine/concrete/RectanglePushInEffect";
+import { StageFileImportService } from "../StageFileImportService";
 
 /**
  * 处理文件拖拽到舞台的引擎
@@ -39,21 +35,27 @@ export namespace DragFileIntoStageEngine {
       const sortedImagePaths = await sortFileList(imagePaths);
 
       let imageIndex = 0;
+      let importedCount = 0;
       for (const filePath of pathList) {
         const extName = filePath.split(".").pop()?.toLowerCase();
         if (extName === "png") {
           await handleDropImage(project, sortedImagePaths[imageIndex], "image/png", imageIndex);
           imageIndex++;
+          importedCount++;
         } else if (extName === "jpg" || extName === "jpeg") {
           await handleDropImage(project, sortedImagePaths[imageIndex], "image/jpeg", imageIndex);
           imageIndex++;
+          importedCount++;
         } else if (extName === "webp") {
           await handleDropImage(project, sortedImagePaths[imageIndex], "image/webp", imageIndex);
           imageIndex++;
+          importedCount++;
         } else if (extName === "txt") {
-          handleDropTxt(project, filePath);
+          await handleDropTxt(project, filePath);
+          importedCount++;
         } else if (extName === "svg") {
-          handleDropSvg(project, filePath);
+          await handleDropSvg(project, filePath);
+          importedCount++;
         } else if (extName === "prg") {
           const uri = URI.file(filePath);
           onOpenFile(uri, "拖拽prg文件到舞台");
@@ -61,6 +63,17 @@ export namespace DragFileIntoStageEngine {
           toast.error(`不支持的文件类型: 【${extName}】`);
         }
       }
+      if (importedCount > 0) {
+        project.historyManager.recordStep();
+      }
+    } catch (error) {
+      toast.error(`处理拖拽文件失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  export async function handleDropBrowserFiles(project: Project, files: File[]) {
+    try {
+      await StageFileImportService.importBrowserFiles(project, files);
     } catch (error) {
       toast.error(`处理拖拽文件失败: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -153,75 +166,6 @@ export namespace DragFileIntoStageEngine {
   }
 
   /**
-   * 将任意图片格式（jpg/jpeg/webp/png）转换为 PNG Blob
-   * 利用浏览器 Canvas API 完成转换，并根据设置决定是否压缩
-   */
-  async function convertToPngBlob(fileData: Uint8Array, sourceMime: string): Promise<Blob> {
-    const sourceBlob = new Blob([fileData as BlobPart], { type: sourceMime });
-    const url = URL.createObjectURL(sourceBlob);
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.naturalWidth;
-        let h = img.naturalHeight;
-
-        if (Settings.resizePastedImages) {
-          const maxSize = Settings.maxPastedImageSize;
-          const maxDim = Math.max(w, h);
-          if (maxDim > maxSize) {
-            const scale = maxSize / maxDim;
-            w = Math.round(w * scale);
-            h = Math.round(h * scale);
-          }
-        }
-
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          URL.revokeObjectURL(url);
-          reject(new Error("无法获取 Canvas 2D 上下文"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, w, h);
-        URL.revokeObjectURL(url);
-
-        if (Settings.compressImageToBlackAndWhite) {
-          applyBlackAndWhite(canvas);
-        }
-
-        const outputType = Settings.compressImageToBlackAndWhite
-          ? "image/png"
-          : Settings.compressImageToWebp
-            ? "image/webp"
-            : "image/png";
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              if (outputType === "image/webp" && !blob.type.includes("webp")) {
-                toast.warning("当前系统 webview 不支持 WebP 编码，已回退为 PNG");
-              }
-              resolve(blob);
-            } else reject(new Error("Canvas toBlob 失败"));
-          },
-          outputType,
-          Settings.compressImageToBlackAndWhite
-            ? undefined
-            : Settings.compressImageToWebp
-              ? Settings.webpQuality
-              : undefined,
-        );
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("图片加载失败"));
-      };
-      img.src = url;
-    });
-  }
-
-  /**
    * 处理图片文件拖拽到舞台（支持 png/jpg/jpeg/webp，统一转换为 PNG 存储）
    * 按 imageIndex 从左下阶梯排列：第1张在视野中心，之后每张相对前一张左移50px、下移50px
    */
@@ -232,52 +176,12 @@ export namespace DragFileIntoStageEngine {
     imageIndex: number = 0,
   ): Promise<void> {
     const fileData = await readFile(filePath);
-
-    // 转为 PNG（非 PNG 格式必然转换；PNG 格式仅在开启压缩时经过 canvas 以缩放尺寸）
-    const blob =
-      sourceMime === "image/png" &&
-      !Settings.resizePastedImages &&
-      !Settings.compressImageToWebp &&
-      !Settings.compressImageToBlackAndWhite
-        ? new Blob([new Uint8Array(fileData)], { type: "image/png" })
-        : await convertToPngBlob(new Uint8Array(fileData), sourceMime);
-
-    const attachmentId = project.addAttachment(blob);
-
-    // 第1张在视野中心，之后每张左移50px、下移50px（y轴向下）
-    // collisionBox 使用占位尺寸，ImageNode 构造后会异步加载 bitmap 并自动更新碰撞箱
-    const addLocation = project.camera.location.clone();
-    addLocation.x += -imageIndex * 50;
-    addLocation.y += imageIndex * 50;
-
-    const imageNode = new ImageNode(
+    await StageFileImportService.addImageBlob(
       project,
-      {
-        attachmentId,
-        collisionBox: new CollisionBox([new Rectangle(addLocation, new Vector(1, 1))]),
-      },
-      false,
-      Settings.wrapImageInGroup
-        ? () => {
-            const section = Section.fromEntities(project, [imageNode]);
-            section.text = "";
-            project.stageManager.add(section);
-          }
-        : undefined,
+      new Blob([new Uint8Array(fileData)], { type: sourceMime }),
+      sourceMime,
+      imageIndex,
     );
-
-    project.stageManager.add(imageNode);
-
-    const mouseSections = project.sectionMethods.getSectionsByInnerLocation(addLocation);
-    if (mouseSections.length > 0) {
-      project.stageManager.goInSection([imageNode], mouseSections[0]);
-      project.effects.addEffect(
-        RectanglePushInEffect.sectionGoInGoOut(
-          imageNode.collisionBox.getRectangle(),
-          mouseSections[0].collisionBox.getRectangle(),
-        ),
-      );
-    }
   }
 
   /** @deprecated 请使用 handleDropImage */
@@ -288,24 +192,12 @@ export namespace DragFileIntoStageEngine {
   export async function handleDropTxt(project: Project, filePath: string) {
     const fileData = await readFile(filePath);
     const content = new TextDecoder().decode(fileData);
-    const textNode = new TextNode(project, {
-      text: content,
-      collisionBox: new CollisionBox([new Rectangle(project.camera.location.clone(), new Vector(300, 150))]),
-      sizeAdjust: "manual",
-    });
-
-    project.stageManager.add(textNode);
+    await StageFileImportService.addTextContent(project, content);
   }
 
   export async function handleDropSvg(project: Project, filePath: string) {
     const fileData = await readFile(filePath);
     const content = new TextDecoder().decode(fileData);
-    const svg = new DOMParser().parseFromString(content, "image/svg+xml");
-    const item = new XMLSerializer().serializeToString(svg.documentElement);
-    const attachmentId = project.addAttachment(new Blob([item], { type: "image/svg+xml" }));
-    const entity = new SvgNode(project, {
-      attachmentId,
-    });
-    project.stageManager.add(entity);
+    await StageFileImportService.addSvgText(project, content);
   }
 }

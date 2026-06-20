@@ -7,10 +7,10 @@ import { Dialog } from "@/components/ui/dialog";
 import { Popover } from "@/components/ui/popover";
 import { SubWindow } from "@/core/service/SubWindow";
 import { activeTabAtom } from "@/state";
+import { downloadBrowserBlob, pickBrowserFiles } from "@/utils/browserFileDialog";
+import { isTauriRuntime } from "@/utils/runtime";
 import { Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { useAtom } from "jotai";
 import { BrushCleaning, FileOutput, Plus, RefreshCcw, Trash } from "lucide-react";
 import mime from "mime";
@@ -25,7 +25,7 @@ export default function AttachmentsWindow() {
   const [urls, setUrls] = useState(new Map<string, string>());
 
   function refresh() {
-    setAttachments(project!.attachments);
+    setAttachments(new Map(project!.attachments));
   }
   useEffect(() => {
     refresh();
@@ -51,16 +51,19 @@ export default function AttachmentsWindow() {
       <div className="flex gap-3">
         <Button
           onClick={async () => {
-            const path = await open();
-            if (!path) return;
-            const uuid = await Dialog.input("附件 ID", "如果不需要自定义就直接点确定", {
-              defaultValue: randomUUID(),
-            });
-            if (!uuid) return;
-            const u8a = await readFile(path);
-            const blob = new Blob([new Uint8Array(u8a)], { type: mime.getType(path) || "application/octet-stream" });
-            project.attachments.set(uuid, blob);
-            refresh();
+            try {
+              const attachment = await pickAttachmentBlob();
+              if (!attachment) return;
+              const uuid = await Dialog.input("附件 ID", "如果不需要自定义就直接点确定", {
+                defaultValue: randomUUID(),
+              });
+              if (!uuid) return;
+              project.attachments.set(uuid, attachment.blob);
+              project.projectState = ProjectState.Unsaved;
+              refresh();
+            } catch (error) {
+              toast.error(`添加附件失败：${error instanceof Error ? error.message : String(error)}`);
+            }
           }}
         >
           <Plus />
@@ -130,16 +133,11 @@ export default function AttachmentsWindow() {
             <ContextMenuContent>
               <ContextMenuItem
                 onClick={async () => {
-                  const path = await save({
-                    filters: [
-                      {
-                        name: blob.type,
-                        extensions: [...(mime.getAllExtensions(blob.type) ?? [])],
-                      },
-                    ],
-                  });
-                  if (!path) return;
-                  await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+                  try {
+                    await exportAttachmentBlob(id, blob);
+                  } catch (error) {
+                    toast.error(`导出附件失败：${error instanceof Error ? error.message : String(error)}`);
+                  }
                 }}
               >
                 <FileOutput />
@@ -150,6 +148,7 @@ export default function AttachmentsWindow() {
                 onClick={async () => {
                   if (await Dialog.confirm("删除附件", "所有引用了此附件的实体将无法正常渲染", { destructive: true })) {
                     project.attachments.delete(id);
+                    project.projectState = ProjectState.Unsaved;
                     refresh();
                   }
                 }}
@@ -173,6 +172,57 @@ function formatBytes(bytes: number, decimals = 2): string {
   const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
+
+async function pickAttachmentBlob(): Promise<{ blob: Blob; name: string } | null> {
+  if (isTauriRuntime()) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const path = await open();
+    if (!path || Array.isArray(path)) return null;
+    const u8a = await readFile(path);
+    return {
+      name: path.split(/[/\\]/).pop() || "attachment",
+      blob: new Blob([new Uint8Array(u8a)], { type: mime.getType(path) || "application/octet-stream" }),
+    };
+  }
+
+  const files = await pickBrowserFiles({ multiple: false });
+  const file = files[0];
+  if (!file) return null;
+  const { StageFileImportService } = await import("@/core/service/dataManageService/StageFileImportService");
+  StageFileImportService.assertBrowserFileSize(file);
+  return {
+    name: file.name || "attachment",
+    blob: new Blob([await file.arrayBuffer()], {
+      type: file.type || mime.getType(file.name) || "application/octet-stream",
+    }),
+  };
+}
+
+async function exportAttachmentBlob(id: string, blob: Blob): Promise<void> {
+  const extensions = [...(mime.getAllExtensions(blob.type) ?? [])];
+  if (isTauriRuntime()) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    const path = await save({
+      filters: [
+        {
+          name: blob.type,
+          extensions,
+        },
+      ],
+    });
+    if (!path) return;
+    await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+    return;
+  }
+
+  downloadBrowserBlob(blob, attachmentFileName(id, extensions[0]));
+}
+
+function attachmentFileName(id: string, extension?: string): string {
+  return extension ? `${id}.${extension}` : id;
 }
 
 AttachmentsWindow.open = () => {

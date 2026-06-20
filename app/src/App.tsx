@@ -429,7 +429,7 @@ export default function App() {
             onClick={() => getCurrentWindow().close()}
           ></div>
         )}
-        {!isWeb && activeTab instanceof Project ? <DropWindowCover project={activeTab} /> : null}
+        {activeTab instanceof Project ? <DropWindowCover project={activeTab} /> : null}
       </div>
     </>
   );

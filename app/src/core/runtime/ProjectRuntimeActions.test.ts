@@ -80,7 +80,7 @@ describe("ProjectRuntimeActions", () => {
     await expect(actions.capabilities(project)).resolves.toMatchObject({
       backup: false,
       saveAs: false,
-      importFilesToStage: false,
+      importFilesToStage: true,
       importFolderToStage: false,
       exportBlob: false,
     });
@@ -105,12 +105,6 @@ describe("ProjectRuntimeActions", () => {
     await expect(ProjectRuntimeActions.importFolderToStage(project, "tree")).rejects.toMatchObject({
       detail: {
         action: "importFolderToStage",
-        runtime: "browser",
-      },
-    });
-    await expect(ProjectRuntimeActions.importFilesToStage(project, "image")).rejects.toMatchObject({
-      detail: {
-        action: "importFilesToStage",
         runtime: "browser",
       },
     });
@@ -166,7 +160,19 @@ describe("ProjectRuntimeActions", () => {
     });
   });
 
-  it("reports visible unsupported errors for server-owned file menu actions", async () => {
+  it("uses browser file exchange actions for server projects outside Tauri", async () => {
+    const project = fakeProject(ServerProjectManager.projectUri("project-1"));
+
+    expect(ProjectRuntimeActions.resolve(project).kind).toBe("server");
+    expect(ProjectRuntimeActions.resolveForFileExchange(project).kind).toBe("browser");
+    await expect(ProjectRuntimeActions.resolveForFileExchange(project).capabilities(project)).resolves.toMatchObject({
+      importFilesToStage: true,
+      importFolderToStage: false,
+    });
+  });
+
+  it("reports visible unsupported errors for server-owned file menu actions in Tauri", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
     vi.spyOn(ServerProjectManager, "getServerInfo").mockResolvedValue(serverInfo({ backup: true }));
     const project = fakeProject(ServerProjectManager.projectUri("project-1"));
 

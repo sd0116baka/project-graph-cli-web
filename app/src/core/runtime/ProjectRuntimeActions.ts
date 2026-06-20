@@ -92,6 +92,13 @@ export namespace ProjectRuntimeActions {
     return browserProjectActions;
   }
 
+  export function resolveForFileExchange(project: Project): ProjectRuntimeActionSet {
+    if (!isTauriRuntime()) {
+      return browserProjectActions;
+    }
+    return resolve(project);
+  }
+
   export function canUseLocalProjectFileSystem(project: Project): boolean {
     return resolve(project).kind === "tauri";
   }
@@ -109,7 +116,7 @@ export namespace ProjectRuntimeActions {
   }
 
   export async function importFilesToStage(project: Project, kind: ImportFileKind): Promise<void> {
-    return resolve(project).importFilesToStage({ project }, kind);
+    return resolveForFileExchange(project).importFilesToStage({ project }, kind);
   }
 
   export async function importFolderToStage(project: Project, mode: FolderImportMode): Promise<void> {
@@ -215,12 +222,17 @@ export namespace ProjectRuntimeActions {
       if (!pathList) return;
 
       const paths = Array.isArray(pathList) ? pathList : [pathList];
+      let importedCount = 0;
       for (const [index, path] of paths.entries()) {
         if (kind === "image") {
           await DragFileIntoStageEngine.handleDropImage(project, path, imageMimeFromPath(path), index);
         } else {
           await DragFileIntoStageEngine.handleDropSvg(project, path);
         }
+        importedCount++;
+      }
+      if (importedCount > 0) {
+        project.historyManager.recordStep();
       }
     },
     async importFolderToStage({ project }, mode) {
@@ -250,7 +262,26 @@ export namespace ProjectRuntimeActions {
     createBackup: unsupported("browser", "createBackup", unsupportedBrowserLocalBackupMessage),
     saveAs: unsupported("browser", "saveAs", "浏览器本地另存为还没有接入运行时适配层。"),
     revealProjectLocation: unsupported("browser", "revealProjectLocation", "浏览器不能打开本机项目所在文件夹。"),
-    importFilesToStage: unsupported("browser", "importFilesToStage", "浏览器导入文件需要 File API 通道。"),
+    async importFilesToStage({ project }, kind) {
+      const { extensionAccept, pickBrowserFiles } = await import("@/utils/browserFileDialog");
+      if (kind === "text") {
+        const { TextFileImporter } = await import("@/core/service/dataGenerateService/TextFileImporter");
+        const { StageFileImportService } = await import("@/core/service/dataManageService/StageFileImportService");
+        const files = await pickBrowserFiles({
+          accept: extensionAccept(StageFileImportService.textFileExtensions()),
+          multiple: true,
+        });
+        await TextFileImporter.importTextFilesFromFiles(project, files);
+        return;
+      }
+
+      const { StageFileImportService } = await import("@/core/service/dataManageService/StageFileImportService");
+      const files = await pickBrowserFiles({
+        accept: kind === "image" ? extensionAccept(["png", "jpg", "jpeg", "webp"]) : "image/svg+xml,.svg",
+        multiple: true,
+      });
+      await StageFileImportService.importBrowserFiles(project, files);
+    },
     importFolderToStage: unsupported("browser", "importFolderToStage", "浏览器从文件夹生成需要目录选择或上传通道。"),
     exportBlob: unsupported("browser", "exportBlob", "浏览器导出还没有接入运行时适配层。"),
     scanFolderForStage: unsupported("browser", "scanFolderForStage", "浏览器文件夹扫描还没有接入运行时适配层。"),
@@ -280,7 +311,7 @@ export namespace ProjectRuntimeActions {
     backup: false,
     saveAs: false,
     revealProjectLocation: false,
-    importFilesToStage: false,
+    importFilesToStage: true,
     importFolderToStage: false,
     exportBlob: false,
     scanFolderForStage: false,

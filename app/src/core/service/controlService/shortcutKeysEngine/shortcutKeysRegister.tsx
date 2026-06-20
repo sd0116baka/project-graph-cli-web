@@ -1278,12 +1278,13 @@ export const allKeyBinds: KeyBindItem[] = [
       try {
         await openCurrentProjectFolder(activeProject);
       } catch (error) {
-        if (!ProjectRuntimeActions.isRuntimeActionError(error)) {
-          throw error;
+        if (ProjectRuntimeActions.isRuntimeActionError(error)) {
+          toast.error(ProjectRuntimeActions.formatError(error), {
+            description: ProjectRuntimeActions.recoveryHint(error),
+          });
+          return;
         }
-        toast.error(ProjectRuntimeActions.formatError(error), {
-          description: ProjectRuntimeActions.recoveryHint(error),
-        });
+        toast.error(`打开项目位置失败：${error instanceof Error ? error.message : String(error)}`);
       }
     },
   },

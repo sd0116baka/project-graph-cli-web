@@ -32,8 +32,7 @@ export default function TextImportWindow() {
         setFileContent(result);
       }
     } catch (error) {
-      toast.error("读取文件失败");
-      console.error(error);
+      toast.error(`读取文件失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsLoading(false);
     }
@@ -48,8 +47,7 @@ export default function TextImportWindow() {
         toast.success(`成功导入 ${count} 个文件`);
       }
     } catch (error) {
-      toast.error("导入失败");
-      console.error(error);
+      toast.error(`导入失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsLoading(false);
     }
@@ -180,7 +178,7 @@ export default function TextImportWindow() {
             <div className="mb-2 font-medium">
               {fileContent.fileName} ({fileContent.content.length} 字)
             </div>
-            <div className="text-muted-foreground max-h-32 overflow-auto whitespace-pre-wrap text-sm">
+            <div className="text-muted-foreground max-h-32 overflow-auto text-sm whitespace-pre-wrap">
               {fileContent.content.slice(0, 500)}
               {fileContent.content.length > 500 && "..."}
             </div>

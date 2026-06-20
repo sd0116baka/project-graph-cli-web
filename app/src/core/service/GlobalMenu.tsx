@@ -238,12 +238,13 @@ export function GlobalMenu() {
         await refresh();
       }
     } catch (error) {
-      if (!ProjectRuntimeActions.isRuntimeActionError(error)) {
-        throw error;
+      if (ProjectRuntimeActions.isRuntimeActionError(error)) {
+        toast.error(ProjectRuntimeActions.formatError(error), {
+          description: ProjectRuntimeActions.recoveryHint(error),
+        });
+        return;
       }
-      toast.error(ProjectRuntimeActions.formatError(error), {
-        description: ProjectRuntimeActions.recoveryHint(error),
-      });
+      toast.error(`操作失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
