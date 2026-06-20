@@ -18,6 +18,7 @@ backup_projectGraphTips
 backup_*
 
 .turbo
+.workflow/
 
 # mac下开发需要忽略
 .DS_Store
