@@ -340,6 +340,7 @@ export namespace ServerProjectManager {
       try {
         const response = await fetch(apiUrl("/api/events"), {
           headers: clientHeaders(),
+          credentials: "same-origin",
           signal: controller.signal,
         });
         if (!response.ok) await throwResponseError(response, "/api/events");
@@ -351,7 +352,9 @@ export namespace ServerProjectManager {
         scheduleReconnect();
       } catch (error) {
         if (controller.signal.aborted) return;
-        if (!reportedFailure && !(error instanceof ServerProjectError)) {
+        if (!reportedFailure && error instanceof ServerProjectError) {
+          dispatchServerError(error.detail);
+        } else if (!reportedFailure) {
           reportedFailure = true;
           dispatchServerError({
             status: 0,
@@ -413,11 +416,16 @@ export namespace ServerProjectManager {
     updateProjectEtag(id, response);
   }
 
+  export function getProjectEtag(id: string): string | undefined {
+    return projectEtags.get(id);
+  }
+
   export async function projectBlobExists(id: string): Promise<boolean> {
     await ensureBackendConnection();
     const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(id)}/blob`), {
       method: "HEAD",
       headers: clientHeaders(),
+      credentials: "same-origin",
     });
     if (response.status === 404) return false;
     if (!response.ok) await throwResponseError(response, `/api/projects/${encodeURIComponent(id)}/blob`);
@@ -451,6 +459,7 @@ export namespace ServerProjectManager {
     void fetch(apiUrl(`/api/projects/${encodeURIComponent(id)}/unlock`), {
       method: "POST",
       headers: clientHeaders(),
+      credentials: "same-origin",
       keepalive: true,
     }).catch(() => undefined);
   }
@@ -528,6 +537,7 @@ export namespace ServerProjectManager {
     const response = await fetch(apiUrl(path), {
       ...init,
       headers,
+      credentials: init.credentials ?? "same-origin",
     });
     if (!response.ok) await throwResponseError(response, path);
     return response;

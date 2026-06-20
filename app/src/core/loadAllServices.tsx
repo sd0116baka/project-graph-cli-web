@@ -76,6 +76,7 @@ import { HistoryManager } from "@/core/stage/stageManager/StageHistoryManager";
 import { StageManager } from "@/core/stage/stageManager/StageManager";
 import { AutoSaveBackupService } from "./service/dataFileService/AutoSaveBackupService";
 import { ServerProjectLockService } from "./service/dataFileService/ServerProjectLockService";
+import { ServerProjectRemoteSyncService } from "./service/dataFileService/ServerProjectRemoteSyncService";
 import { ReferenceManager } from "./stage/stageManager/concreteMethods/StageReferenceManager";
 
 /**
@@ -182,4 +183,5 @@ export function loadAllServicesBeforeInit(project: Project): void {
 export function loadAllServicesAfterInit(project: Project): void {
   project.loadService(HistoryManager);
   project.loadService(ServerProjectLockService);
+  project.loadService(ServerProjectRemoteSyncService);
 }

@@ -113,6 +113,7 @@ async function handleApi(req, res, requestUrl) {
       authMode: authPassword ? "basic" : "none",
       lanMode: !isLoopbackHost(host),
       allowedOrigin: process.env.PG_WEB_ALLOWED_ORIGIN ?? "*",
+      eventClients: eventClients.size,
       capabilities: {
         projects: true,
         blobs: true,
@@ -200,11 +201,7 @@ async function handleApi(req, res, requestUrl) {
         const content = await readBinary(req);
         const ifMatch = req.headers["if-match"];
         const etag = await runProjectMutation(id, async () => {
-          const lock = await getActiveLock(id);
-          if (lock && lock.clientId !== clientId) {
-            throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
-          }
-
+          await assertProjectWriteNotLocked(id, clientId, ifMatch);
           return writeProjectBlob(id, content, { expectedEtag: ifMatch });
         });
         res.setHeader("ETag", etag);
@@ -285,12 +282,6 @@ async function handleApi(req, res, requestUrl) {
     }
 
     if (segments.length === 4 && segments[3] === "patch" && req.method === "POST") {
-      const lock = await getActiveLock(id);
-      if (lock && lock.clientId !== clientId) {
-        sendError(res, 423, "project_locked", "Project is locked by another client", { lock });
-        return;
-      }
-
       const body = await readJson(req);
       const patch = normalizeGraphPatch(body);
       const revisionToken = graphRevisionToken(body);
@@ -313,11 +304,7 @@ async function handleApi(req, res, requestUrl) {
 
       const ifMatch = req.headers["if-match"] ?? req.headers["x-project-graph-revision"] ?? revisionToken;
       const response = await runProjectMutation(id, async () => {
-        const lock = await getActiveLock(id);
-        if (lock && lock.clientId !== clientId) {
-          throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
-        }
-
+        await assertProjectWriteNotLocked(id, clientId, ifMatch);
         const { archive, etag: currentEtag } = await readProjectArchive(id);
         if (ifMatch && !etagMatches(ifMatch, currentEtag)) {
           throw createHttpError("Project revision does not match", 412, "etag_mismatch", {
@@ -627,6 +614,26 @@ async function getActiveLock(id) {
   return locks[id] ?? null;
 }
 
+async function assertProjectWriteNotLocked(id, clientId, revisionGuard) {
+  if (hasSpecificRevisionGuard(revisionGuard)) {
+    return;
+  }
+  const lock = await getActiveLock(id);
+  if (lock && lock.clientId !== clientId) {
+    throw createHttpError("Project is locked by another client", 423, "project_locked", { lock });
+  }
+}
+
+function hasSpecificRevisionGuard(value) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  return String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .some((part) => part !== "" && part !== "*");
+}
+
 async function lockProject(id, clientId, ttlSeconds, clientName) {
   await ensureProjectMetadata(id);
   await expireLocks();
@@ -686,6 +693,13 @@ async function serveStatic(res, pathname) {
     return;
   }
   res.setHeader("Content-Type", contentTypeFor(filePath));
+  if (path.basename(filePath) === "index.html") {
+    res.setHeader("Cache-Control", "no-store");
+  } else if (path.relative(staticDir, filePath).startsWith(`assets${path.sep}`)) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  } else {
+    res.setHeader("Cache-Control", "no-cache");
+  }
   res.setHeader("Content-Length", String(stat.size));
   res.writeHead(200);
   createReadStream(filePath).pipe(res);

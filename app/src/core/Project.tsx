@@ -262,6 +262,7 @@ export class Project extends Tab {
     references: { sections: Record<string, string[]>; files: string[] };
     metadata: PrgMetadata;
     readme?: string;
+    attachments: Map<string, Blob>;
   }> {
     const fileContent = await this.fs.read(this.uri);
     const reader = new ZipReader(new Uint8ArrayReader(fileContent));
@@ -272,6 +273,7 @@ export class Project extends Tab {
     let references: { sections: Record<string, string[]>; files: string[] } = { sections: {}, files: [] };
     let metadata: PrgMetadata = createDefaultMetadata("2.0.0");
     let readme: string | undefined = undefined;
+    const attachments = new Map<string, Blob>();
 
     for (const entry of entries) {
       if (!entry.directory) {
@@ -307,12 +309,12 @@ export class Project extends Tab {
           const ext = match[2];
           const type = mime.getType(ext) || "application/octet-stream";
           const attachment = await entry.getData!(new BlobWriter(type));
-          this.attachments.set(uuid, attachment);
+          attachments.set(uuid, attachment);
         }
       }
     }
 
-    return { serializedStageObjects, tags, references, metadata, readme };
+    return { serializedStageObjects, tags, references, metadata, readme, attachments };
   }
 
   /**
@@ -325,7 +327,7 @@ export class Project extends Tab {
     }
     try {
       // 解析项目文件
-      const { serializedStageObjects, tags, references, metadata, readme } = await this.parseProjectFile();
+      const { serializedStageObjects, tags, references, metadata, readme, attachments } = await this.parseProjectFile();
 
       // 检查并确认升级
       const currentVersion = metadata?.version || "2.0.0";
@@ -345,6 +347,7 @@ export class Project extends Tab {
       this.references = references;
       this.metadata = upgradedMetadata;
       this.readme = readme;
+      this.attachments = attachments;
 
       // 更新引用关系，包括双向线的偏移状态
       // 注意：这里需要在服务加载后才能调用，所以需要检查服务是否已加载

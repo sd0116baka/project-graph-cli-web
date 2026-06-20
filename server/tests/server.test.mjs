@@ -259,6 +259,83 @@ describe("@graphif/project-graph-web-server", () => {
     });
   });
 
+  it("allows revision guarded patches through another client's advisory lock", async () => {
+    const server = await startServer();
+    const projectId = await createProject(server);
+    const originalEtag = await putArchive(server, projectId, createArchiveWithThumbnail());
+    const lock = await requestJson(server, `/api/projects/${projectId}/lock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "browser-client" },
+      body: JSON.stringify({ clientId: "browser-client", clientName: "Browser", ttlSeconds: 300 }),
+    });
+
+    const unguarded = await requestJson(server, `/api/projects/${projectId}/patch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "agent-client" },
+      body: JSON.stringify([{ op: "rename_node", id: "Review", text: "Blocked" }]),
+    });
+    const guarded = await requestJson(server, `/api/projects/${projectId}/patch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": originalEtag,
+        "X-Project-Graph-Client": "agent-client",
+      },
+      body: JSON.stringify([{ op: "rename_node", id: "Review", text: "Reviewed by agent" }]),
+    });
+    const staleGuarded = await requestJson(server, `/api/projects/${projectId}/patch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": originalEtag,
+        "X-Project-Graph-Client": "agent-client",
+      },
+      body: JSON.stringify([{ op: "rename_node", id: "Review", text: "Too late" }]),
+    });
+
+    expect(lock.response.status).toBe(200);
+    expect(unguarded.response.status).toBe(423);
+    expect(unguarded.body).toMatchObject({ ok: false, code: "project_locked" });
+    expect(guarded.response.status).toBe(200);
+    expect(guarded.body).toMatchObject({ ok: true, changed: ["Review"] });
+    expect(staleGuarded.response.status).toBe(412);
+    expect(staleGuarded.body).toMatchObject({ ok: false, code: "etag_mismatch" });
+  });
+
+  it("allows revision guarded blob writes through another client's advisory lock", async () => {
+    const server = await startServer();
+    const projectId = await createProject(server);
+    const originalEtag = await putArchive(server, projectId, createArchiveWithThumbnail());
+    const nextArchive = importMarkdown("# Intake\n\n## Agent Update\n", { prgVersion: "2.4.0" });
+    const nextData = await writePrgData(nextArchive, { preserveExtraEntries: true, preserveThumbnail: true });
+    const lock = await requestJson(server, `/api/projects/${projectId}/lock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Project-Graph-Client": "browser-client" },
+      body: JSON.stringify({ clientId: "browser-client", clientName: "Browser", ttlSeconds: 300 }),
+    });
+
+    const unguarded = await requestJson(server, `/api/projects/${projectId}/blob`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/vnd.project-graph", "X-Project-Graph-Client": "agent-client" },
+      body: nextData,
+    });
+    const guarded = await requestJson(server, `/api/projects/${projectId}/blob`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/vnd.project-graph",
+        "If-Match": originalEtag,
+        "X-Project-Graph-Client": "agent-client",
+      },
+      body: nextData,
+    });
+
+    expect(lock.response.status).toBe(200);
+    expect(unguarded.response.status).toBe(423);
+    expect(unguarded.body).toMatchObject({ ok: false, code: "project_locked" });
+    expect(guarded.response.status).toBe(200);
+    expect(guarded.body).toMatchObject({ ok: true, revisionToken: expect.any(String) });
+  });
+
   it("keeps server info behind authentication when auth is enabled", async () => {
     const server = await startServer({ authPassword: "secret" });
 
