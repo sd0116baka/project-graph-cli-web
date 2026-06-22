@@ -2,7 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use tauri::Manager;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +155,7 @@ pub fn project_graph_backend_start(
         .map(PathBuf::from)
         .unwrap_or_else(default_backend_log_path);
     let mut command = Command::new(powershell_executable());
+    hide_command_window(&mut command);
     command
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
@@ -207,7 +215,9 @@ pub fn project_graph_backend_stop(
     let script = backend_script(&app, "stop-web.ps1")?;
     let port_start = options.port.or(options.port_start).unwrap_or(37820);
     let port_end = options.port.or(options.port_end).unwrap_or(37920);
-    let output = Command::new(powershell_executable())
+    let mut command = Command::new(powershell_executable());
+    hide_command_window(&mut command);
+    let output = command
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -422,4 +432,16 @@ fn powershell_executable() -> &'static str {
 
 fn default_backend_log_path() -> PathBuf {
     std::env::temp_dir().join("project-graph-backend-start.log")
+}
+
+fn hide_command_window(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = command;
+    }
 }
