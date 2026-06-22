@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { authClient } from "@/core/service/AuthClient";
 import { MouseLocation } from "@/core/service/controlService/MouseLocation";
 import { RecentFileManager } from "@/core/service/dataFileService/RecentFileManager";
+import { ServerProjectManager } from "@/core/service/dataFileService/ServerProjectManager";
 import { StartFilesManager } from "@/core/service/dataFileService/StartFilesManager";
 import { ColorManager } from "@/core/service/feedbackService/ColorManager";
 import { QuickSettingsManager } from "@/core/service/QuickSettingsManager";
@@ -64,6 +65,9 @@ const el = document.getElementById("root")!;
   // 这些东西依赖上面的东西，所以单独一个Promise.all
   await Promise.all([loadLanguageFiles(), loadSyncModules(), initAuth()]);
   await renderApp(isCliMode);
+  if (isDesktop && !isCliMode && !isLiveMode) {
+    void startDefaultBackend();
+  }
   await loadStartFile();
   if (isLiveMode) {
     await startLiveCommandService(Number.isFinite(livePort) && livePort > 0 ? livePort : undefined);
@@ -84,6 +88,51 @@ async function loadSyncModules() {
   EdgeCollisionBoxGetter.init();
   // SoundService.init();
   MouseLocation.init();
+}
+
+async function startDefaultBackend() {
+  try {
+    ServerProjectManager.clearServerBaseUrl();
+    const existingAuthConfig = await ServerProjectManager.getBackendAuthConfig();
+    if (existingAuthConfig?.exists) {
+      ServerProjectManager.setServerAuth({
+        user: existingAuthConfig.user,
+        password: existingAuthConfig.password,
+      });
+    }
+    await ServerProjectManager.startBackendDaemon({
+      authUser: existingAuthConfig?.exists ? existingAuthConfig.user : undefined,
+      authPassword: existingAuthConfig?.exists ? existingAuthConfig.password : undefined,
+      noAuth: false,
+      localOnly: false,
+    });
+    if (!existingAuthConfig?.exists) {
+      const generatedAuthConfig = await waitForBackendAuthConfig();
+      ServerProjectManager.setServerAuth({
+        user: generatedAuthConfig.user,
+        password: generatedAuthConfig.password,
+      });
+    }
+    await ServerProjectManager.waitForBackendConnection(60000, {
+      lanMode: true,
+      preferLan: true,
+    });
+  } catch (error) {
+    toast.warning(`自动启动 LAN 后端失败：${ServerProjectManager.formatError(error)}`);
+  }
+}
+
+async function waitForBackendAuthConfig(): Promise<ServerProjectManager.BackendAuthConfig> {
+  const deadline = Date.now() + 10000;
+  let lastConfig: ServerProjectManager.BackendAuthConfig | undefined;
+  while (Date.now() < deadline) {
+    lastConfig = await ServerProjectManager.getBackendAuthConfig();
+    if (lastConfig?.exists) {
+      return lastConfig;
+    }
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
+  }
+  throw new Error(`LAN 后端认证配置未生成${lastConfig ? `：${lastConfig.authPath}` : ""}`);
 }
 
 /** 初始化认证状态：从持久化存储中恢复 session */
