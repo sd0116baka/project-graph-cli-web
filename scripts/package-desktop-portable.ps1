@@ -80,6 +80,43 @@ function Copy-File {
   Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
+function Stop-ProcessesUsingPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  $PathFull = [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $CurrentPid = $PID
+  $Processes = Get-CimInstance Win32_Process |
+    Where-Object {
+      $_.ProcessId -ne $CurrentPid -and (
+        ($_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($PathFull, [StringComparison]::OrdinalIgnoreCase)) -or
+        ($_.CommandLine -and $_.CommandLine.IndexOf($PathFull, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+      )
+    }
+
+  foreach ($ProcessInfo in $Processes) {
+    $Process = Get-Process -Id $ProcessInfo.ProcessId -ErrorAction SilentlyContinue
+    if (-not $Process) {
+      continue
+    }
+
+    Write-Host "Stopping stale portable process PID $($Process.Id): $($Process.ProcessName)"
+    if ($Process.MainWindowHandle -ne 0) {
+      $null = $Process.CloseMainWindow()
+      if ($Process.WaitForExit(5000)) {
+        continue
+      }
+    }
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Get-DesktopExecutable {
   $ReleaseDir = Join-Path $TauriDir "target\release"
   $Candidates = @(
@@ -170,6 +207,7 @@ $ShaPath = "$ZipPath.sha256"
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Assert-PathInside -Parent $OutputDir -Child $StageRoot
 if (Test-Path -LiteralPath $StageRoot) {
+  Stop-ProcessesUsingPath -Path $StageRoot
   Remove-Item -LiteralPath $StageRoot -Recurse -Force
 }
 if (Test-Path -LiteralPath $ZipPath) {
