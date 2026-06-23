@@ -18,7 +18,7 @@
     }
   },
   "scripts": {
-    "build": "tsx build.ts",
+    "build": "tsx build.ts && prettier --write index.d.ts",
     "publish": "pnpm publish --no-git-checks"
   },
   "dependencies": {
