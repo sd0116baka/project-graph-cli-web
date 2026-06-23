@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { deserialize, serializable, serialize } from "../src";
+import { configureSerializer, deserialize, serializable, serialize } from "../src";
 
 describe("对象序列化", () => {
   class A {
@@ -110,6 +110,27 @@ describe("对象序列化", () => {
 
     expect(typeof b.meta).toBe("object");
     expect(b.meta).toBe(b.mirrorMeta);
+  });
+
+  test("配置原始类名后会刷新已经注册的类名映射", () => {
+    class MinifiedTextNode {
+      @serializable
+      public text: string;
+
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+
+    expect(() => deserialize({ _: "TextNode", text: "hi" })).toThrow("Cannot find class undefined");
+
+    configureSerializer((class_) => (class_ === MinifiedTextNode ? "TextNode" : class_.name));
+
+    const deserialized = deserialize({ _: "TextNode", text: "hi" });
+    expect(deserialized).toBeInstanceOf(MinifiedTextNode);
+    expect(deserialized.text).toBe("hi");
+
+    configureSerializer((class_) => class_.name);
   });
 });
 

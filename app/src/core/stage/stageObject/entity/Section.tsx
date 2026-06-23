@@ -1,6 +1,6 @@
 import { randomUUID } from "@/utils/randomUUID";
-import { Project } from "@/core/Project";
-import { Renderer } from "@/core/render/canvas2d/renderer";
+import type { Project } from "@/core/Project";
+import { RENDERER_FONT_SIZE, RENDERER_NODE_PADDING } from "@/core/render/canvas2d/rendererConstants";
 import { NodeMoveShadowEffect } from "@/core/service/feedbackService/effectEngine/concrete/NodeMoveShadowEffect";
 import { Settings } from "@/core/service/Settings";
 import { ConnectableEntity } from "@/core/stage/stageObject/abstract/ConnectableEntity";
@@ -10,7 +10,7 @@ import { getTextSize } from "@/utils/font";
 import { Color, ProgressNumber, Vector } from "@graphif/data-structures";
 import { id, passExtraAtArg1, passObject, serializable } from "@graphif/serializer";
 import { Line, Rectangle, Shape } from "@graphif/shapes";
-import { Value } from "platejs";
+import type { Value } from "platejs";
 
 @passExtraAtArg1
 @passObject
@@ -54,8 +54,8 @@ export class Section extends ConnectableEntity {
   /** 获取折叠状态下的碰撞箱 */
   private collapsedCollisionBox(): CollisionBox {
     const centerLocation = this._collisionBoxNormal.getRectangle().center;
-    const collapsedRectangleSize = getTextSize(this.text, Renderer.FONT_SIZE).add(
-      Vector.same(Renderer.NODE_PADDING).multiply(2),
+    const collapsedRectangleSize = getTextSize(this.text, RENDERER_FONT_SIZE).add(
+      Vector.same(RENDERER_NODE_PADDING).multiply(2),
     );
     const collapsedRectangle = new Rectangle(
       centerLocation.clone().subtract(collapsedRectangleSize.multiply(0.5)),
@@ -146,14 +146,14 @@ export class Section extends ConnectableEntity {
    */
   adjustLocationAndSize() {
     let rectangle: Rectangle;
-    const titleSize = getTextSize(this.text, Renderer.FONT_SIZE);
+    const titleSize = getTextSize(this.text, RENDERER_FONT_SIZE);
 
     const titleBarHeight = this.text === "" ? 0 : 50;
 
     if (this.children.length === 0) {
       rectangle = new Rectangle(
         this.collisionBox.getRectangle().location,
-        new Vector(Math.max(titleSize.x + Renderer.NODE_PADDING * 2, 100), 100),
+        new Vector(Math.max(titleSize.x + RENDERER_NODE_PADDING * 2, 100), 100),
       );
     } else {
       // 调整展开状态
@@ -161,7 +161,7 @@ export class Section extends ConnectableEntity {
         this.children.map((child) => child.collisionBox.getRectangle()),
         30,
       );
-      rectangle.size.x = Math.max(rectangle.size.x, titleSize.x + Renderer.NODE_PADDING * 2);
+      rectangle.size.x = Math.max(rectangle.size.x, titleSize.x + RENDERER_NODE_PADDING * 2);
       // 留白范围在上面调整
       rectangle.location = rectangle.location.subtract(new Vector(0, titleBarHeight));
       rectangle.size = rectangle.size.add(new Vector(0, titleBarHeight));

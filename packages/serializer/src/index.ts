@@ -7,6 +7,7 @@ export function configureSerializer(
   getOriginalNameOfFn: (class_: { [x: string | number | symbol]: any; new (...args: any[]): any }) => string,
 ) {
   getOriginalNameOf = getOriginalNameOfFn;
+  rebuildClassMap();
 }
 
 /**
@@ -24,7 +25,7 @@ export const serializable = (target: any, key: string) => {
     Reflect.getMetadata(lastSerializableIndexSymbol, target) + 1,
     target,
   );
-  classes.set(getOriginalNameOf(target.constructor), target.constructor);
+  registerClass(target.constructor);
 };
 
 const passExtraAtArg1Symbol = Symbol("passExtraAtArg1");
@@ -40,6 +41,25 @@ const idSymbol = Symbol("id");
 export const id = Reflect.metadata(idSymbol, true);
 
 const classes: Map<string, any> = new Map();
+const registeredClasses: Set<any> = new Set();
+
+function registerClass(class_: any) {
+  registeredClasses.add(class_);
+  const originalName = getOriginalNameOf(class_);
+  if (originalName) {
+    classes.set(originalName, class_);
+  }
+  if (class_.name) {
+    classes.set(class_.name, class_);
+  }
+}
+
+function rebuildClassMap() {
+  classes.clear();
+  for (const class_ of registeredClasses) {
+    registerClass(class_);
+  }
+}
 
 /**
  * 将任意类型对象转换为 序列化形式，不包含函数

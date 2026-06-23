@@ -1,0 +1,3 @@
+export const RENDERER_FONT_SIZE = 32;
+export const RENDERER_NODE_PADDING = 14;
+export const RENDERER_NODE_ROUNDED_RADIUS = 8;

@@ -1,4 +1,4 @@
-import { Project } from "@/core/Project";
+import type { Project } from "@/core/Project";
 import { ProgressNumber } from "@graphif/data-structures";
 
 /**

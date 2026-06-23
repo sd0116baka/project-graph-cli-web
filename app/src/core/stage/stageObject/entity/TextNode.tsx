@@ -1,6 +1,10 @@
 import { randomUUID } from "@/utils/randomUUID";
 import type { Project } from "@/core/Project";
-import { Renderer } from "@/core/render/canvas2d/renderer";
+import {
+  RENDERER_FONT_SIZE,
+  RENDERER_NODE_PADDING,
+  RENDERER_NODE_ROUNDED_RADIUS,
+} from "@/core/render/canvas2d/rendererConstants";
 import { NodeMoveShadowEffect } from "@/core/service/feedbackService/effectEngine/concrete/NodeMoveShadowEffect";
 import { Settings } from "@/core/service/Settings";
 import { ConnectableEntity } from "@/core/stage/stageObject/abstract/ConnectableEntity";
@@ -34,7 +38,7 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
 
   /**
    * 字体缩放级别，整数，基准值为0，对应默认字体大小
-   * 计算公式：finalFontSize = Renderer.FONT_SIZE * Math.pow(2, fontScaleLevel)
+   * 计算公式：finalFontSize = RENDERER_FONT_SIZE * Math.pow(2, fontScaleLevel)
    */
   @serializable
   public fontScaleLevel: number = 0;
@@ -155,7 +159,7 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
   /**
    * 字体大小缓存，避免重复计算
    */
-  private fontSizeCache: number = Renderer.FONT_SIZE;
+  private fontSizeCache: number = RENDERER_FONT_SIZE;
 
   /**
    * 获取当前字体大小
@@ -168,21 +172,21 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
    * 动态内边距，与字体大小等比缩放
    */
   public getPadding(): number {
-    return (this.fontSizeCache / Renderer.FONT_SIZE) * Renderer.NODE_PADDING;
+    return (this.fontSizeCache / RENDERER_FONT_SIZE) * RENDERER_NODE_PADDING;
   }
 
   /**
    * 动态边框粗细，与字体大小等比缩放，基准为 2px
    */
   public getBorderWidth(): number {
-    return (this.fontSizeCache / Renderer.FONT_SIZE) * 2;
+    return (this.fontSizeCache / RENDERER_FONT_SIZE) * 2;
   }
 
   /**
    * 动态圆角半径，与字体大小等比缩放
    */
   public getBorderRadius(): number {
-    return (this.fontSizeCache / Renderer.FONT_SIZE) * Renderer.NODE_ROUNDED_RADIUS;
+    return (this.fontSizeCache / RENDERER_FONT_SIZE) * RENDERER_NODE_ROUNDED_RADIUS;
   }
 
   /**
@@ -191,7 +195,7 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
    * 这样步长就是 0.5，避免了浮点数精度问题
    */
   private updateFontSizeCache(): void {
-    this.fontSizeCache = Renderer.FONT_SIZE * 2 ** (this.fontScaleLevel / 2);
+    this.fontSizeCache = RENDERER_FONT_SIZE * 2 ** (this.fontScaleLevel / 2);
     if (this.fontSizeCache >= 2) {
       // 确保指数变化的过程中字体不会变小到0
       this.fontSizeCache = Math.floor(this.fontSizeCache);
@@ -294,10 +298,10 @@ export class TextNode extends ConnectableEntity implements ResizeAble {
   }
 
   // private adjustSizeByTextWidthLimitWidth(width: number) {
-  //   const currentSize = this.project.textRenderer.measureMultiLineTextSize(this.text, Renderer.FONT_SIZE, width, 1.5);
+  //   const currentSize = this.project.textRenderer.measureMultiLineTextSize(this.text, RENDERER_FONT_SIZE, width, 1.5);
   //   this.collisionBox.shapes[0] = new Rectangle(
   //     this.rectangle.location.clone(),
-  //     currentSize.clone().add(Vector.same(Renderer.NODE_PADDING).multiply(2)),
+  //     currentSize.clone().add(Vector.same(RENDERER_NODE_PADDING).multiply(2)),
   //   );
   // }
 

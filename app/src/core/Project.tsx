@@ -87,6 +87,7 @@ import { AutoSaveBackupService } from "./service/dataFileService/AutoSaveBackupS
 import { generateThumbnail } from "./service/dataGenerateService/generateThumbnail";
 import { ProjectUpgrader } from "./stage/ProjectUpgrader";
 import { ReferenceManager } from "./stage/stageManager/concreteMethods/StageReferenceManager";
+import "./stage/stageObject/serializerRegistration";
 import { Tab } from "./Tab";
 
 if (import.meta.hot) {

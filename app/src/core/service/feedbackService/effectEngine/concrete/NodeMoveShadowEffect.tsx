@@ -1,7 +1,7 @@
 import { mixColors, ProgressNumber, Vector } from "@graphif/data-structures";
 import { Rectangle } from "@graphif/shapes";
 import { Random } from "@/core/algorithm/random";
-import { Project } from "@/core/Project";
+import type { Project } from "@/core/Project";
 import { Effect } from "@/core/service/feedbackService/effectEngine/effectObject";
 
 /**

@@ -13,6 +13,7 @@ import { Color, mixColors, Vector } from "@graphif/data-structures";
 import { CubicBezierCurve, Rectangle } from "@graphif/shapes";
 import { GlobalMaskRenderer } from "./utilsRenderer/globalMaskRenderer";
 import i18next from "i18next";
+import { RENDERER_FONT_SIZE, RENDERER_NODE_PADDING, RENDERER_NODE_ROUNDED_RADIUS } from "./rendererConstants";
 
 /**
  * 渲染器
@@ -22,10 +23,10 @@ export class Renderer {
   /**
    * 节点上的文字大小
    */
-  static FONT_SIZE = 32;
-  static NODE_PADDING = 14;
+  static FONT_SIZE = RENDERER_FONT_SIZE;
+  static NODE_PADDING = RENDERER_NODE_PADDING;
   /// 节点的圆角半径
-  static NODE_ROUNDED_RADIUS = 8;
+  static NODE_ROUNDED_RADIUS = RENDERER_NODE_ROUNDED_RADIUS;
 
   w = 0;
   h = 0;
