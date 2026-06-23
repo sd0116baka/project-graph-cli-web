@@ -167,7 +167,7 @@ declare class ArcEdge extends Edge {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       sourceRectangleRate = Vector.same(0.5),
       targetRectangleRate = Vector.same(0.5),
@@ -389,6 +389,8 @@ declare class AutoSaveBackupService {
   getOriginalFileName(): Promise<string>;
   createBackupFile(backupFilePath: string): Promise<void>;
   manageBackupFiles(backupDir: string, prefix?: string): Promise<void>;
+  canUseLocalBackup(): Promise<boolean>;
+  backupRuntimeProject(showSuccess: boolean): Promise<boolean>;
 }
 
 declare class BackgroundRenderer {
@@ -537,7 +539,7 @@ declare class ConnectPoint extends ConnectableEntity {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       collisionBox = new CollisionBox([
         new Rectangle(Vector.getZero(), Vector.same(ConnectPoint.CONNECT_POINT_SHRINK_RADIUS * 2)),
       ]),
@@ -1386,7 +1388,7 @@ declare class ExtensionEntity extends ConnectableEntity {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID(),
+      uuid = randomUUID(),
       extensionId = "",
       typeName = "",
       customData = {},
@@ -1453,7 +1455,9 @@ declare interface FileSystemProvider {
 declare class GenerateFromFolder {
   constructor(project: Project | { _: "Project" | (string & {}) });
   generateFromFolder(folderPath: string): Promise<void>;
+  generateFromFolderEntry(folderStructure: FolderEntry): Promise<void>;
   generateTreeFromFolder(folderPath: string): Promise<void>;
+  generateTreeFromFolderEntry(folderStructure: FolderEntry): Promise<void>;
   getColorByPath(path: string): Promise<Color>;
   fileExtColorMap: Promise<Record<string, string>>;
 }
@@ -1558,7 +1562,7 @@ declare class ImageNode extends ConnectableEntity implements ResizeAble {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),
       details = [],
       attachmentId = "",
@@ -1741,7 +1745,7 @@ declare class LatexNode extends ConnectableEntity {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID(),
+      uuid = randomUUID(),
       details = [],
       latexSource = "",
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),
@@ -1809,7 +1813,7 @@ declare class LineEdge extends Edge {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       sourceRectangleRate = Vector.same(0.5),
       targetRectangleRate = Vector.same(0.5),
@@ -1988,7 +1992,7 @@ declare class MultiTargetUndirectedEdge extends ConnectableAssociation {
     {
       associationList = [] as ConnectableEntity[],
       text = "",
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       color = Color.Transparent,
       rectRates = associationList.map(() => Vector.same(0.5)),
       arrow = "none" as UndirectedEdgeArrowType,
@@ -2071,7 +2075,6 @@ declare class NodeAdder {
     diffLocation: Vector | { _: "Vector" | (string & {}) } = Vector.getZero(),
     autoLayout = true,
   ): Promise<void>;
-  getIndentLevel(line: string, indention: number): Promise<number>;
 }
 
 declare class NodeConnector {
@@ -2122,7 +2125,7 @@ declare class PenStroke extends Entity {
   getPath(): Promise<Vector>[];
   constructor(
     project: Project | { _: "Project" | (string & {}) },
-    { uuid = crypto.randomUUID() as string, segments = [] as PenStrokeSegment[], color = Color.White },
+    { uuid = randomUUID() as string, segments = [] as PenStrokeSegment[], color = Color.White },
   );
   getCollisionBoxFromSegmentList(segmentList: PenStrokeSegment[]): Promise<CollisionBox>;
 }
@@ -2156,15 +2159,20 @@ declare class Project extends Tab {
   constructor(uri: URI);
   newDraft(): Promise<Project>;
   compareVersion(version1: string, version2: string): Promise<number>;
-  checkAndConfirmUpgrade(currentVersion: string, latestVersion: string): Promise<boolean>;
+  checkAndConfirmUpgrade(
+    currentVersion: string,
+    latestVersion: string,
+    options: ProjectInitOptions = {},
+  ): Promise<boolean>;
   parseProjectFile(): Promise<{
     serializedStageObjects: any[];
     tags: string[];
     references: { sections: Record<string, string[]>; files: string[] };
     metadata: PrgMetadata;
     readme?: string;
+    attachments: Map<string, Blob>;
   }>;
-  init(): Promise<void>;
+  init(options: ProjectInitOptions = {}): Promise<void>;
   get isDraft(): Promise<any>;
   get title(): Promise<string>;
   get icon(): Promise<any>;
@@ -2319,7 +2327,7 @@ declare class ReferenceBlockNode extends ConnectableEntity implements ResizeAble
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), new Vector(400, 200))]),
       fileName = "",
       sectionName = "",
@@ -2375,6 +2383,8 @@ declare class ReferenceManager {
   insertRefDataToSourcePrgFile(fileName: string, sectionName: string): Promise<void>;
   jumpToReferenceLocation(fileName: string, referenceBlockNodeSectionName: string): Promise<void>;
   openSectionReferencePanel(section: Section | { _: "Section" | (string & {}) }): Promise<void>;
+  resolveReferenceUri(fileName: string, recentFiles?: RecentFileManager.RecentFile[]): Promise<void>;
+  currentProjectReferenceName(): Promise<void>;
 }
 
 declare class Renderer {
@@ -2475,7 +2485,7 @@ declare class Section extends ConnectableEntity {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       text = "",
       collisionBox = new CollisionBox([new Rectangle(new Vector(0, 0), new Vector(0, 0))]),
       _collisionBoxNormal: collisionBoxNormal = undefined as CollisionBox | undefined,
@@ -2538,10 +2548,6 @@ declare class SectionMethods {
   shallowerSection(sections: Section[]): Promise<Section>[];
   shallowerNotSectionEntities(entities: Entity[]): Promise<Entity>[];
   isEntityInSection(
-    entity: Entity | { _: "Entity" | (string & {}) },
-    section: Section | { _: "Section" | (string & {}) },
-  ): Promise<boolean>;
-  isEntityInSection_fake(
     entity: Entity | { _: "Entity" | (string & {}) },
     section: Section | { _: "Section" | (string & {}) },
   ): Promise<boolean>;
@@ -2926,8 +2932,12 @@ declare class StageExportSvg {
   dumpStage(): Promise<React.ReactNode>;
   dumpStageToSVGString(): Promise<string>;
   dumpSelectedToSVGString(): Promise<string>;
+  exportStageToSVGBlob(): Promise<Blob>;
+  exportSelectedToSVGBlob(): Promise<Blob>;
   exportStageToSVGFile(filePath: string): Promise<void>;
   exportSelectedToSVGFile(filePath: string): Promise<void>;
+  exportToSVGBlob(imageNodes: ImageNode[], render: () => string): Promise<Blob>;
+  createInlineImageMap(imageNodes: ImageNode[]): Promise<Map<string, string>>;
 }
 
 declare class StageImport {
@@ -3191,7 +3201,7 @@ declare class SvgNode extends ConnectableEntity implements ResizeAble {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID(),
+      uuid = randomUUID(),
       details = [],
       attachmentId = "",
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),
@@ -3289,7 +3299,7 @@ declare class SyncAssociation extends Association {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       keys = ["text", "color", "details"] as SyncableKey[],
       associationList = [] as StageObject[],
       color = Color.Transparent,
@@ -3317,9 +3327,9 @@ declare class Tab extends React.Component<Record<string, never>, Record<string, 
   constructor(props: Record<string, never>);
   registerFileSystemProvider(scheme: string, provider: { new (...args: any[]): FileSystemProvider }): Promise<void>;
   get fs(): Promise<FileSystemProvider>;
-  on(event: string | number, listener: (...args: any[]) => void): Promise<this>;
-  emit(event: string | number, ...args: any[]): Promise<boolean>;
-  removeAllListeners(event?: string | number): Promise<this>;
+  on(event: string | symbol, listener: (...args: any[]) => void): Promise<this>;
+  emit(event: string | symbol, ...args: any[]): Promise<boolean>;
+  removeAllListeners(event?: string | symbol): Promise<this>;
   loadService(service: { id?: string; new (...args: any[]): any }): Promise<void>;
   disposeService(serviceId: string): Promise<void>;
   getService<T extends keyof this & string>(serviceId: T): Promise<this[T]>;
@@ -3374,7 +3384,7 @@ declare class TextNode extends ConnectableEntity implements ResizeAble {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       text = "",
       details = [],
       collisionBox = new CollisionBox([new Rectangle(Vector.getZero(), Vector.getZero())]),
@@ -3625,7 +3635,7 @@ declare class UrlNode extends ConnectableEntity {
   constructor(
     project: Project | { _: "Project" | (string & {}) },
     {
-      uuid = crypto.randomUUID() as string,
+      uuid = randomUUID() as string,
       title = "",
       details = [],
       url = "",
