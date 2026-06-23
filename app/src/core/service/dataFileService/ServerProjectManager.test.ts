@@ -51,4 +51,44 @@ describe("ServerProjectManager", () => {
     expect(localStorage.getItem("project-graph-web-client-id")).toBe(id);
     expect(ServerProjectManager.getClientId()).toBe(id);
   });
+
+  it("stores backend auth by normalized backend URL", () => {
+    vi.stubGlobal("localStorage", new MemoryStorage());
+
+    ServerProjectManager.setStoredServerAuth("http://192.168.1.23:37820/", {
+      user: "remote-user",
+      password: "remote-password",
+    });
+    ServerProjectManager.setStoredServerAuth("http://127.0.0.1:37820", {
+      user: "local-user",
+      password: "local-password",
+    });
+
+    expect(ServerProjectManager.getStoredServerAuth("http://192.168.1.23:37820")).toEqual({
+      user: "remote-user",
+      password: "remote-password",
+    });
+    expect(ServerProjectManager.getStoredServerAuth("http://127.0.0.1:37820")).toEqual({
+      user: "local-user",
+      password: "local-password",
+    });
+  });
+
+  it("keeps stored backend auth after clearing the active backend connection", () => {
+    vi.stubGlobal("localStorage", new MemoryStorage());
+
+    ServerProjectManager.setServerBaseUrl("http://192.168.1.23:37820");
+    ServerProjectManager.setStoredServerAuth("http://192.168.1.23:37820", {
+      user: "remote-user",
+      password: "remote-password",
+    });
+
+    ServerProjectManager.clearServerBaseUrl();
+
+    expect(ServerProjectManager.getServerBaseUrl()).toBe("");
+    expect(ServerProjectManager.getStoredServerAuth("http://192.168.1.23:37820")).toEqual({
+      user: "remote-user",
+      password: "remote-password",
+    });
+  });
 });

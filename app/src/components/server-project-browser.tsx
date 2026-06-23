@@ -36,8 +36,8 @@ export function ServerProjectBrowser() {
   const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
   const [useLanBackend, setUseLanBackend] = useState(true);
   const [autoStartLanBackend, setAutoStartLanBackendState] = useState(ServerProjectManager.getAutoStartLanBackend);
-  const [backendAdminUser, setBackendAdminUser] = useState(readBackendAdminUser);
-  const [backendAdminPassword, setBackendAdminPassword] = useState("");
+  const [backendAdminUser, setBackendAdminUser] = useState(() => readBackendAuth().user);
+  const [backendAdminPassword, setBackendAdminPassword] = useState(() => readBackendAuth().password);
   const [backendAuthConfigLoaded, setBackendAuthConfigLoaded] = useState(isWeb);
   const [backendAuthConfigExists, setBackendAuthConfigExists] = useState(false);
   const [startedBackendPort, setStartedBackendPort] = useState<number | undefined>();
@@ -116,6 +116,7 @@ export function ServerProjectBrowser() {
       const backendUrl = await ServerProjectManager.ensureBackendConnection();
       setActiveBackendUrl(backendUrl);
       setBackendUrlInput(backendUrl);
+      applyStoredBackendAuth(backendUrl);
       await refreshBackendTargets();
       const nextProjects = await ServerProjectManager.listProjects();
       setProjects(nextProjects);
@@ -155,15 +156,19 @@ export function ServerProjectBrowser() {
       const config = await ServerProjectManager.getBackendAuthConfig();
       if (config?.exists) {
         setBackendAuthConfigExists(true);
-        setBackendAdminUser(config.user || defaultBackendAdminUser);
-        setBackendAdminPassword(config.password);
-        persistBackendAdminAuth({ user: config.user || defaultBackendAdminUser, password: config.password });
+        if (!readBackendAuth(backendUrlInput).password && isLocalBackendUrl(backendUrlInput)) {
+          const auth = { user: config.user || defaultBackendAdminUser, password: config.password };
+          setBackendAdminUser(auth.user);
+          setBackendAdminPassword(auth.password);
+          persistBackendAdminAuth(auth);
+          persistBackendAuthForUrl(backendUrlInput, auth);
+        }
         return;
       }
       setBackendAuthConfigExists(false);
-      setBackendAdminUser(config?.user || readBackendAdminUser());
-      setBackendAdminPassword("");
-      writeLocalStorage(backendAdminPasswordStorageKey, "");
+      const auth = readBackendAuth(backendUrlInput);
+      setBackendAdminUser(config?.user || auth.user);
+      setBackendAdminPassword(auth.password);
     } catch (error) {
       reportFailure(error, "读取后端认证配置失败");
     } finally {
@@ -175,7 +180,12 @@ export function ServerProjectBrowser() {
     applyBackendAuth();
     setIsConnecting(true);
     try {
+      const auth = backendAdminAuth();
+      ServerProjectManager.setServerAuth(auth);
       const next = await ServerProjectManager.connectServerBaseUrl(url);
+      if (auth) {
+        persistBackendAuthForUrl(next, auth);
+      }
       setActiveBackendUrl(next);
       setBackendUrlInput(next);
       await refreshProjects();
@@ -230,6 +240,9 @@ export function ServerProjectBrowser() {
       });
       setActiveBackendUrl(backendUrl);
       setBackendUrlInput(backendUrl);
+      if (auth) {
+        persistBackendAuthForUrl(backendUrl, auth);
+      }
       const info = await ServerProjectManager.getServerInfo();
       setServerInfo(info);
       setStartedBackendPort(info.port);
@@ -404,11 +417,43 @@ export function ServerProjectBrowser() {
   function updateBackendAdminUser(value: string) {
     setBackendAdminUser(value);
     writeLocalStorage(backendAdminUserStorageKey, value.trim() || defaultBackendAdminUser);
+    persistCurrentBackendAuth(value, backendAdminPassword);
   }
 
   function updateBackendAdminPassword(value: string) {
     setBackendAdminPassword(value);
     writeLocalStorage(backendAdminPasswordStorageKey, value);
+    persistCurrentBackendAuth(backendAdminUser, value);
+  }
+
+  function updateBackendUrlInput(value: string) {
+    setBackendUrlInput(value);
+    const auth = readBackendAuth(value);
+    if (!auth.password) return;
+    setBackendAdminUser(auth.user);
+    setBackendAdminPassword(auth.password);
+    persistBackendAdminAuth(auth);
+    ServerProjectManager.setServerAuth(auth);
+  }
+
+  function applyStoredBackendAuth(url: string) {
+    if (isWeb || !useLanBackend) return;
+    const auth = readBackendAuth(url);
+    if (!auth.password) return;
+    setBackendAdminUser(auth.user);
+    setBackendAdminPassword(auth.password);
+    persistBackendAuthForUrl(url, auth);
+    ServerProjectManager.setServerAuth(auth);
+  }
+
+  function persistCurrentBackendAuth(user: string, password: string) {
+    const auth = createBackendAdminAuth(user, password);
+    if (!auth) return;
+    persistBackendAdminAuth(auth);
+    if (backendUrlInput.trim()) {
+      ServerProjectManager.setStoredServerAuth(backendUrlInput, auth);
+    }
+    ServerProjectManager.setServerAuth(auth);
   }
 
   function setAutoStartLanBackend(enabled: boolean) {
@@ -467,7 +512,7 @@ export function ServerProjectBrowser() {
             className="min-w-0 flex-1"
             value={backendUrlInput}
             placeholder="http://127.0.0.1:37820"
-            onChange={(event) => setBackendUrlInput(event.target.value)}
+            onChange={(event) => updateBackendUrlInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 void connectBackend();
@@ -709,6 +754,19 @@ function readBackendAdminUser(): string {
   return readLocalStorage(backendAdminUserStorageKey) || defaultBackendAdminUser;
 }
 
+function readBackendAdminPassword(): string {
+  return readLocalStorage(backendAdminPasswordStorageKey);
+}
+
+function readBackendAuth(url = ServerProjectManager.getServerBaseUrl()): ServerProjectManager.BackendAuth {
+  return (
+    ServerProjectManager.getStoredServerAuth(url) ?? {
+      user: readBackendAdminUser(),
+      password: readBackendAdminPassword(),
+    }
+  );
+}
+
 function createBackendAdminAuth(user: string, password: string): ServerProjectManager.BackendAuth | undefined {
   const normalizedUser = user.trim() || defaultBackendAdminUser;
   const normalizedPassword = password.trim();
@@ -719,6 +777,20 @@ function createBackendAdminAuth(user: string, password: string): ServerProjectMa
 function persistBackendAdminAuth(auth: ServerProjectManager.BackendAuth) {
   writeLocalStorage(backendAdminUserStorageKey, auth.user);
   writeLocalStorage(backendAdminPasswordStorageKey, auth.password);
+}
+
+function persistBackendAuthForUrl(url: string, auth: ServerProjectManager.BackendAuth) {
+  persistBackendAdminAuth(auth);
+  ServerProjectManager.setStoredServerAuth(url, auth);
+}
+
+function isLocalBackendUrl(url: string): boolean {
+  try {
+    const host = new URL(url || "http://127.0.0.1").hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return !url.trim();
+  }
 }
 
 function readLocalStorage(key: string): string {

@@ -179,6 +179,7 @@ export namespace ServerProjectManager {
   const clientIdStorageKey = "project-graph-web-client-id";
   const clientNameStorageKey = "project-graph-web-client-name";
   const backendUrlStorageKey = "project-graph-backend-url";
+  const backendAuthStorageKey = "project-graph-backend-auth-by-url";
   const autoStartLanBackendStorageKey = "project-graph-auto-start-lan-backend";
   const projectEtags = new Map<string, string>();
   let activeServerBaseUrl: string | undefined;
@@ -283,6 +284,21 @@ export namespace ServerProjectManager {
       localStorage.setItem(backendUrlStorageKey, next);
     }
     return next;
+  }
+
+  export function getStoredServerAuth(url: string = serverBaseUrl()): BackendAuth | undefined {
+    const key = parseBackendUrl(url);
+    if (!key.ok || typeof localStorage === "undefined") return undefined;
+    const authByUrl = readBackendAuthByUrl();
+    return authByUrl[key.url];
+  }
+
+  export function setStoredServerAuth(url: string, auth: BackendAuth): void {
+    const key = parseBackendUrl(url);
+    if (!key.ok || typeof localStorage === "undefined") return;
+    const authByUrl = readBackendAuthByUrl();
+    authByUrl[key.url] = auth;
+    localStorage.setItem(backendAuthStorageKey, JSON.stringify(authByUrl));
   }
 
   export function setServerAuth(auth: BackendAuth | undefined): void {
@@ -685,6 +701,27 @@ export namespace ServerProjectManager {
       headers.Authorization = basicAuthHeader(activeBackendAuth);
     }
     return headers;
+  }
+
+  function readBackendAuthByUrl(): Record<string, BackendAuth> {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(backendAuthStorageKey);
+    if (!raw) return {};
+    try {
+      const value = JSON.parse(raw) as Record<string, BackendAuth>;
+      return Object.fromEntries(Object.entries(value).filter(([, auth]) => auth?.user && auth.password));
+    } catch (error) {
+      dispatchServerError({
+        status: 0,
+        code: "backend_auth_storage_invalid",
+        message: "后端认证缓存格式错误",
+        recovery: "已忽略损坏的本地认证缓存，请重新输入后端账号密码。",
+        path: "",
+        details: { error: error instanceof Error ? error.message : String(error) },
+      });
+      localStorage.removeItem(backendAuthStorageKey);
+      return {};
+    }
   }
 
   function basicAuthHeader(auth: BackendAuth): string {
