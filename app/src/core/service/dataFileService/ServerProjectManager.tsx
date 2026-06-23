@@ -179,6 +179,7 @@ export namespace ServerProjectManager {
   const clientIdStorageKey = "project-graph-web-client-id";
   const clientNameStorageKey = "project-graph-web-client-name";
   const backendUrlStorageKey = "project-graph-backend-url";
+  const autoStartLanBackendStorageKey = "project-graph-auto-start-lan-backend";
   const projectEtags = new Map<string, string>();
   let activeServerBaseUrl: string | undefined;
   let activeBackendAuth: BackendAuth | undefined;
@@ -286,6 +287,20 @@ export namespace ServerProjectManager {
 
   export function setServerAuth(auth: BackendAuth | undefined): void {
     activeBackendAuth = auth;
+  }
+
+  export function getAutoStartLanBackend(): boolean {
+    if (typeof localStorage === "undefined") return false;
+    return localStorage.getItem(autoStartLanBackendStorageKey) === "1";
+  }
+
+  export function setAutoStartLanBackend(enabled: boolean): void {
+    if (typeof localStorage === "undefined") return;
+    if (enabled) {
+      localStorage.setItem(autoStartLanBackendStorageKey, "1");
+    } else {
+      localStorage.removeItem(autoStartLanBackendStorageKey);
+    }
   }
 
   export async function connectServerBaseUrl(url: string): Promise<string> {

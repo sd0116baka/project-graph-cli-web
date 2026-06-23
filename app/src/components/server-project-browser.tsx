@@ -35,6 +35,7 @@ export function ServerProjectBrowser() {
   const [activeBackendUrl, setActiveBackendUrl] = useState(ServerProjectManager.getServerBaseUrl());
   const [backendUrlInput, setBackendUrlInput] = useState(ServerProjectManager.getServerBaseUrl());
   const [useLanBackend, setUseLanBackend] = useState(true);
+  const [autoStartLanBackend, setAutoStartLanBackendState] = useState(ServerProjectManager.getAutoStartLanBackend);
   const [backendAdminUser, setBackendAdminUser] = useState(readBackendAdminUser);
   const [backendAdminPassword, setBackendAdminPassword] = useState("");
   const [backendAuthConfigLoaded, setBackendAuthConfigLoaded] = useState(isWeb);
@@ -410,6 +411,11 @@ export function ServerProjectBrowser() {
     writeLocalStorage(backendAdminPasswordStorageKey, value);
   }
 
+  function setAutoStartLanBackend(enabled: boolean) {
+    setAutoStartLanBackendState(enabled);
+    ServerProjectManager.setAutoStartLanBackend(enabled);
+  }
+
   const historyProject = projects.find((project) => project.id === historyProjectId);
   const historyLockedByOther = historyProject ? ServerProjectManager.isLockedByOther(historyProject) : false;
   const lockedProjectCount = projects.filter((project) => project.lock).length;
@@ -481,6 +487,18 @@ export function ServerProjectBrowser() {
                 onCheckedChange={(checked) => setUseLanBackend(checked === true)}
               />
               <span>LAN</span>
+            </label>
+          )}
+          {!isWeb && (
+            <label
+              className="border-input flex h-9 shrink-0 items-center gap-2 rounded-md border px-2 text-xs"
+              title="启动桌面端时自动启动 LAN 后端"
+            >
+              <Checkbox
+                checked={autoStartLanBackend}
+                onCheckedChange={(checked) => setAutoStartLanBackend(checked === true)}
+              />
+              <span>自动启动</span>
             </label>
           )}
           <Button

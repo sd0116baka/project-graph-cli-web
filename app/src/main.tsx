@@ -65,7 +65,7 @@ const el = document.getElementById("root")!;
   // 这些东西依赖上面的东西，所以单独一个Promise.all
   await Promise.all([loadLanguageFiles(), loadSyncModules(), initAuth()]);
   await renderApp(isCliMode);
-  if (isDesktop && !isCliMode && !isLiveMode) {
+  if (isDesktop && !isCliMode && !isLiveMode && ServerProjectManager.getAutoStartLanBackend()) {
     void startDefaultBackend();
   }
   await loadStartFile();
