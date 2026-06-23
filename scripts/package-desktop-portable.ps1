@@ -117,6 +117,24 @@ function Stop-ProcessesUsingPath {
   }
 }
 
+function Stop-StagedBackendRuntime {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  $StopScript = Join-Path $Path "backend-runtime\scripts\stop-web.ps1"
+  if (-not (Test-Path -LiteralPath $StopScript)) {
+    return
+  }
+
+  Write-Host "Stopping stale portable backend runtime..."
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $StopScript -PortStart 37820 -PortEnd 37920
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Stale portable backend stop script exited with code $LASTEXITCODE; continuing with process cleanup."
+  }
+}
+
 function Get-DesktopExecutable {
   $ReleaseDir = Join-Path $TauriDir "target\release"
   $Candidates = @(
@@ -207,6 +225,7 @@ $ShaPath = "$ZipPath.sha256"
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Assert-PathInside -Parent $OutputDir -Child $StageRoot
 if (Test-Path -LiteralPath $StageRoot) {
+  Stop-StagedBackendRuntime -Path $StageRoot
   Stop-ProcessesUsingPath -Path $StageRoot
   Remove-Item -LiteralPath $StageRoot -Recurse -Force
 }
